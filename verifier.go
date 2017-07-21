@@ -14,6 +14,7 @@ import (
 	- Add flag for whether to compare file SHAs
 - Should limit actually apply to files or files + directories?
 - Clean up output formatting
+- Add comparison of local contents - i.e. extra local files not present in Dropbox
 */
 
 func main() {
