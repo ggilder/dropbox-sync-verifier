@@ -10,11 +10,15 @@ import (
 )
 
 /* TODO
-- Implement file hash comparison - see https://www.dropbox.com/developers/reference/content-hash
-	- Add flag for whether to compare file SHAs
-- Should limit actually apply to files or files + directories?
-- Clean up output formatting
+- Switch to https://github.com/tj/go-dropbox since that provides content hashing
 - Add comparison of local contents - i.e. extra local files not present in Dropbox
+	- generate map (relpath => hash) for dropbox
+	- generate same map (in parallel?? split to multiple threads??) for local filesys
+	- range over dropbox map, checking against local map - delete both (and log) when perfect match, move to separate log array when missing or wrong hash in local
+	- range over remaining entries in local map to collect "extra" unsynced files
+	- OR possibly a heap is a better way to do this
+- Should limit actually apply to files or files + directories? Do we even need a limit really?
+- Clean up output formatting
 */
 
 func main() {
