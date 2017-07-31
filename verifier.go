@@ -14,6 +14,8 @@ import (
 /* TODO
 - Clean up output formatting
 - Parallelize local/remote file listing
+  - Maybe find additional ways to speed up? Generating local hashes is probably
+    largest bottleneck, would this benefit at all from parallelization?
 - Add progress printing - maybe collect progress from remote/local listing through channels
 - Test for more case issues - already handling when root folder is lowercased
   by Dropbox, but maybe other path components could be as well?
@@ -119,6 +121,7 @@ func main() {
 
 	manifestComparison := compareManifests(dropboxManifest, localManifest)
 
+	fmt.Println("")
 	printFileList(manifestComparison.OnlyRemote, "Files only in remote")
 	printFileList(manifestComparison.OnlyLocal, "Files only in local")
 	printFileList(manifestComparison.ContentMismatch, "Files whose contents don't match")
