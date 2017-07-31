@@ -8,13 +8,15 @@ import (
 	"golang.org/x/text/unicode/norm"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 /* TODO
 - Clean up output formatting
 - Parallelize local/remote file listing
 - Add progress printing - maybe collect progress from remote/local listing through channels
-- Fix case issues - Dropbox seems to return inconsistent case for directories sometimes!
+- Test for more case issues - already handling when root folder is lowercased
+  by Dropbox, but maybe other path components could be as well?
 */
 
 // File stores the result of either Dropbox API or local file listing
@@ -219,6 +221,13 @@ func normalizePath(root string, entryPath string) (string, error) {
 	relPath, err := filepath.Rel(root, entryPath)
 	if err != nil {
 		return "", err
+	}
+	if relPath[0:3] == "../" {
+		// try lowercase root instead
+		relPath, err = filepath.Rel(strings.ToLower(root), entryPath)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	// Normalize Unicode combining characters
