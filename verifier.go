@@ -13,6 +13,7 @@ import (
 /* TODO
 - Clean up output formatting
 - Parallelize local/remote file listing
+- Add progress printing - maybe collect progress from remote/local listing through channels
 */
 
 // File stores the result of either Dropbox API or local file listing
@@ -167,6 +168,9 @@ func getDropboxManifest(dbxClient *dropbox.Client, rootPath string) (manifest *F
 
 		cursor = resp.Cursor
 		keepGoing = resp.HasMore
+
+		// DEBUG info
+		fmt.Printf("%d dropbox files listed          \r", manifest.Len())
 	}
 
 	return
@@ -199,6 +203,9 @@ func getLocalManifest(localRoot string, contentHash bool) (manifest *FileHeap, e
 				Path:        relPath,
 				ContentHash: hash,
 			})
+
+			// DEBUG info
+			fmt.Printf("%d local files listed          \r", manifest.Len())
 		}
 
 		return nil
