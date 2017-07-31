@@ -258,26 +258,32 @@ func compareManifests(remoteManifest, localManifest *FileHeap) *ManifestComparis
 	local := localManifest.PopOrNil()
 	remote := remoteManifest.PopOrNil()
 	for local != nil || remote != nil {
-		if local == nil || local.Path > remote.Path {
+		if local == nil {
 			comparison.OnlyRemote = append(comparison.OnlyRemote, remote.Path)
 			comparison.Misses++
 			remote = remoteManifest.PopOrNil()
-		} else if remote == nil || local.Path < remote.Path {
+		} else if remote == nil {
 			comparison.OnlyLocal = append(comparison.OnlyLocal, local.Path)
 			comparison.Misses++
 			local = localManifest.PopOrNil()
-		} else if remote.Path == local.Path {
-			if !compareFileContents(remote, local) {
+		} else if local.Path > remote.Path {
+			comparison.OnlyRemote = append(comparison.OnlyRemote, remote.Path)
+			comparison.Misses++
+			remote = remoteManifest.PopOrNil()
+		} else if local.Path < remote.Path {
+			comparison.OnlyLocal = append(comparison.OnlyLocal, local.Path)
+			comparison.Misses++
+			local = localManifest.PopOrNil()
+		} else {
+			// this must mean that remote.Path == local.Path
+			if compareFileContents(remote, local) {
+				comparison.Matches++
+			} else {
 				comparison.ContentMismatch = append(comparison.ContentMismatch, local.Path)
 				comparison.Misses++
-			} else {
-				comparison.Matches++
 			}
 			local = localManifest.PopOrNil()
 			remote = remoteManifest.PopOrNil()
-		} else {
-			// This should be unreachable...
-			panic(fmt.Sprintf("Unexpected condition! Local: %v, remote: %v", local, remote))
 		}
 	}
 	return comparison
