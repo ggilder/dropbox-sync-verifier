@@ -2,15 +2,13 @@ package main
 
 import (
 	"fmt"
-	"github.com/dropbox/dropbox-sdk-go-unofficial/dropbox"
-	"github.com/dropbox/dropbox-sdk-go-unofficial/dropbox/files"
 	"github.com/jessevdk/go-flags"
+	"github.com/tj/go-dropbox"
 	"os"
 	"path/filepath"
 )
 
 /* TODO
-- Switch to https://github.com/tj/go-dropbox since that provides content hashing
 - Add comparison of local contents - i.e. extra local files not present in Dropbox
 	- generate map (relpath => hash) for dropbox
 	- generate same map (in parallel?? split to multiple threads??) for local filesys
@@ -53,8 +51,8 @@ func main() {
 
 	localRoot, _ := filepath.Abs(opts.LocalRoot)
 
-	config := dropbox.Config{Token: token, Verbose: false}
-	dbx := files.New(config)
+	dbxClient := dropbox.New(dropbox.NewConfig(token))
+
 	totalFilesListed := 0
 	totalSyncSuccess := 0
 	totalSyncError := 0
@@ -64,44 +62,36 @@ func main() {
 	fmt.Printf("Comparing Dropbox directory \"%v\" to local directory \"%v\"\n", opts.RemoteRoot, localRoot)
 
 	for keepGoing && totalFilesListed < opts.MaxFiles {
-		var resp *files.ListFolderResult
+		var resp *dropbox.ListFolderOutput
 		var err error
 		if cursor != "" {
-			arg := files.NewListFolderContinueArg(cursor)
-			resp, err = dbx.ListFolderContinue(arg)
+			arg := &dropbox.ListFolderContinueInput{Cursor: cursor}
+			resp, err = dbxClient.Files.ListFolderContinue(arg)
 		} else {
 			root := opts.RemoteRoot
 			if root == "/" {
 				root = ""
 			}
-			arg := &files.ListFolderArg{
-				Path:                            root,
-				Recursive:                       true,
-				IncludeMediaInfo:                false,
-				IncludeDeleted:                  false,
-				IncludeHasExplicitSharedMembers: false,
+			arg := &dropbox.ListFolderInput{
+				Path:             root,
+				Recursive:        true,
+				IncludeMediaInfo: false,
+				IncludeDeleted:   false,
 			}
-			resp, err = dbx.ListFolder(arg)
+			resp, err = dbxClient.Files.ListFolder(arg)
 		}
 		if err != nil {
 			panic(err)
 		}
 		for _, entry := range resp.Entries {
-			switch v := entry.(type) {
-			case *files.FolderMetadata:
-				// skip, folders are boring
-			case *files.FileMetadata:
-				synced := checkFileSynced(&v.Metadata.PathDisplay, &opts.RemoteRoot, &localRoot)
+			if entry.Tag == "file" {
+				synced := checkFileSynced(&entry.PathDisplay, &opts.RemoteRoot, &localRoot)
 				if !synced {
-					fmt.Printf("%v is not synced to local root!\n", v.Metadata.PathDisplay)
+					fmt.Printf("%v is not synced to local root!\n", entry.PathDisplay)
 					totalSyncError++
 				} else {
 					totalSyncSuccess++
 				}
-			case *files.DeletedMetadata:
-				// skip, should not be returned anyway
-			default:
-				fmt.Printf("Unexpected entry type! %#v\n", v)
 			}
 		}
 
