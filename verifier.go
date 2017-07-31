@@ -21,6 +21,7 @@ import (
 - Test for more case issues - already handling when root folder is lowercased
   by Dropbox, but maybe other path components could be as well?
 - Ignore more file names in skipLocalFile - see https://www.dropbox.com/help/syncing-uploads/files-not-syncing
+- Do a real retry + backoff for Dropbox API errors (do we have access to the Retry-After header?)
 */
 
 // File stores the result of either Dropbox API or local file listing
