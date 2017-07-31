@@ -156,6 +156,11 @@ func getDropboxManifest(dbxClient *dropbox.Client, rootPath string) (manifest *F
 			resp, err = dbxClient.Files.ListFolder(arg)
 		}
 		if err != nil {
+			if err.Error() == "too_many_requests" {
+				fmt.Fprint(os.Stderr, "Dropbox returned too many requests error, sleeping 2 seconds...")
+				time.Sleep(2 * time.Second)
+				continue
+			}
 			return
 		}
 		for _, entry := range resp.Entries {
@@ -177,7 +182,7 @@ func getDropboxManifest(dbxClient *dropbox.Client, rootPath string) (manifest *F
 		keepGoing = resp.HasMore
 
 		// DEBUG info
-		fmt.Printf("%d dropbox files listed          \r", manifest.Len())
+		fmt.Fprintf(os.Stderr, "%d dropbox files listed          \r", manifest.Len())
 	}
 
 	return
@@ -212,7 +217,7 @@ func getLocalManifest(localRoot string, contentHash bool) (manifest *FileHeap, e
 			})
 
 			// DEBUG info
-			fmt.Printf("%d local files listed          \r", manifest.Len())
+			fmt.Fprintf(os.Stderr, "%d local files listed          \r", manifest.Len())
 		}
 
 		return nil
