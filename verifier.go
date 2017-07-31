@@ -1,23 +1,66 @@
 package main
 
 import (
+	"container/heap"
 	"fmt"
 	"github.com/jessevdk/go-flags"
 	"github.com/tj/go-dropbox"
+	"golang.org/x/text/unicode/norm"
 	"os"
 	"path/filepath"
 )
 
 /* TODO
-- Add comparison of local contents - i.e. extra local files not present in Dropbox
-	- generate map (relpath => hash) for dropbox
-	- generate same map (in parallel?? split to multiple threads??) for local filesys
-	- range over dropbox map, checking against local map - delete both (and log) when perfect match, move to separate log array when missing or wrong hash in local
-	- range over remaining entries in local map to collect "extra" unsynced files
-	- OR possibly a heap is a better way to do this
-- Should limit actually apply to files or files + directories? Do we even need a limit really?
 - Clean up output formatting
+- Implement local content hashing (optionally?)
 */
+
+// File stores the result of either Dropbox API or local file listing
+type File struct {
+	Path        string
+	ContentHash string
+}
+
+// FileHeap is a list of Files sorted by path
+type FileHeap []*File
+
+func (h FileHeap) Len() int           { return len(h) }
+func (h FileHeap) Less(i, j int) bool { return h[i].Path < h[j].Path }
+func (h FileHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+
+// Push a File onto the heap
+func (h *FileHeap) Push(x interface{}) {
+	// Push and Pop use pointer receivers because they modify the slice's length,
+	// not just its contents.
+	*h = append(*h, x.(*File))
+}
+
+// Pop a File off the heap
+func (h *FileHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[0 : n-1]
+	return x
+}
+
+// PopOrNil pops a File off the heap or returns nil if there's nothing left
+func (h *FileHeap) PopOrNil() *File {
+	if h.Len() > 0 {
+		return heap.Pop(h).(*File)
+	}
+	return nil
+}
+
+// ManifestComparison records the relative paths that differ between remote and
+// local versions of a directory
+type ManifestComparison struct {
+	OnlyRemote      []string
+	OnlyLocal       []string
+	ContentMismatch []string
+	Matches         int
+	Misses          int
+}
 
 func main() {
 	token := os.Getenv("DROPBOX_ACCESS_TOKEN")
@@ -30,7 +73,6 @@ func main() {
 		Verbose    bool   `short:"v" long:"verbose" description:"Show verbose debug information"`
 		RemoteRoot string `short:"r" long:"remote" description:"Directory in Dropbox to verify" default:"/"`
 		LocalRoot  string `short:"l" long:"local" description:"Local directory to compare to Dropbox contents" default:"."`
-		MaxFiles   int    `short:"m" long:"max" description:"Maximum number of files to verify" default:"2000"`
 	}
 
 	_, err := flags.Parse(&opts)
@@ -53,27 +95,50 @@ func main() {
 
 	dbxClient := dropbox.New(dropbox.NewConfig(token))
 
-	totalFilesListed := 0
-	totalSyncSuccess := 0
-	totalSyncError := 0
+	fmt.Printf("Comparing Dropbox directory \"%v\" to local directory \"%v\"\n", opts.RemoteRoot, localRoot)
+
+	dropboxManifest, err := getDropboxManifest(dbxClient, opts.RemoteRoot)
+	if err != nil {
+		panic(err)
+	}
+
+	localManifest, err := getLocalManifest(localRoot)
+	if err != nil {
+		panic(err)
+	}
+
+	manifestComparison := compareManifests(dropboxManifest, localManifest)
+
+	printFileList(manifestComparison.OnlyRemote, "Files only in remote")
+	printFileList(manifestComparison.OnlyLocal, "Files only in local")
+	printFileList(manifestComparison.ContentMismatch, "Files whose contents don't match")
+	total := manifestComparison.Matches + manifestComparison.Misses
+	percentString := "(empty)"
+	if total > 0 {
+		matchPercent := 100.0 * float64(manifestComparison.Matches) / float64(total)
+		percentString = fmt.Sprintf("(%d%%)", int(matchPercent))
+	}
+	fmt.Printf("Files matched: %d/%d %s\n", manifestComparison.Matches, total, percentString)
+}
+
+func getDropboxManifest(dbxClient *dropbox.Client, rootPath string) (manifest *FileHeap, err error) {
+	manifest = &FileHeap{}
+	heap.Init(manifest)
 	cursor := ""
 	keepGoing := true
 
-	fmt.Printf("Comparing Dropbox directory \"%v\" to local directory \"%v\"\n", opts.RemoteRoot, localRoot)
-
-	for keepGoing && totalFilesListed < opts.MaxFiles {
+	for keepGoing {
 		var resp *dropbox.ListFolderOutput
-		var err error
 		if cursor != "" {
 			arg := &dropbox.ListFolderContinueInput{Cursor: cursor}
 			resp, err = dbxClient.Files.ListFolderContinue(arg)
 		} else {
-			root := opts.RemoteRoot
-			if root == "/" {
-				root = ""
+			apiPath := rootPath
+			if apiPath == "/" {
+				apiPath = ""
 			}
 			arg := &dropbox.ListFolderInput{
-				Path:             root,
+				Path:             apiPath,
 				Recursive:        true,
 				IncludeMediaInfo: false,
 				IncludeDeleted:   false,
@@ -81,43 +146,120 @@ func main() {
 			resp, err = dbxClient.Files.ListFolder(arg)
 		}
 		if err != nil {
-			panic(err)
+			return
 		}
 		for _, entry := range resp.Entries {
 			if entry.Tag == "file" {
-				synced := checkFileSynced(&entry.PathDisplay, &opts.RemoteRoot, &localRoot)
-				if !synced {
-					fmt.Printf("%v is not synced to local root!\n", entry.PathDisplay)
-					totalSyncError++
-				} else {
-					totalSyncSuccess++
+
+				var relPath string
+				relPath, err = normalizePath(rootPath, entry.PathDisplay)
+				if err != nil {
+					return
 				}
+				heap.Push(manifest, &File{
+					Path:        relPath,
+					ContentHash: entry.ContentHash,
+				})
 			}
 		}
 
 		cursor = resp.Cursor
 		keepGoing = resp.HasMore
-		totalFilesListed += len(resp.Entries)
-
-		fmt.Printf("%v entries listed\n", len(resp.Entries))
-		fmt.Printf("%v entries out of %v limit\n", totalFilesListed, opts.MaxFiles)
-		fmt.Printf("has more? %v\n", resp.HasMore)
-		fmt.Printf("files verified: %v\n", totalSyncSuccess)
-		fmt.Printf("files errored: %v\n", totalSyncError)
 	}
+
+	return
 }
 
-func checkFileSynced(path, root, localRoot *string) bool {
-	var relPath string
-	var err error
-	if relPath, err = filepath.Rel(*root, *path); err != nil {
-		panic(err)
+func getLocalManifest(localRoot string) (manifest *FileHeap, err error) {
+	manifest = &FileHeap{}
+	heap.Init(manifest)
+
+	err = filepath.Walk(localRoot, func(entryPath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if info.Mode().IsRegular() {
+			relPath, err := normalizePath(localRoot, entryPath)
+			if err != nil {
+				return err
+			}
+
+			heap.Push(manifest, &File{
+				Path:        relPath,
+				ContentHash: "",
+			})
+		}
+
+		return nil
+	})
+
+	return
+}
+
+func normalizePath(root string, entryPath string) (string, error) {
+	relPath, err := filepath.Rel(root, entryPath)
+	if err != nil {
+		return "", err
 	}
-	localPath := filepath.Join(*localRoot, relPath)
-	if _, err := os.Stat(localPath); err != nil {
-		// TODO: maybe print in a debug mode
-		// fmt.Printf("%v\n", err.Error())
-		return false
+
+	// Normalize Unicode combining characters
+	relPath = norm.NFC.String(relPath)
+	return relPath, nil
+}
+
+func compareManifests(remoteManifest, localManifest *FileHeap) *ManifestComparison {
+	// 1. Pop a path off both remote and local manifests.
+	// 2. While remote & local are both not nil:
+	//    Compare remote & local:
+	//    a. If local is nil or local > remote, this file is only in remote. Record and pop remote again.
+	//    b. If remote is nil or local < remote, this file is only in local. Record and pop local again.
+	//    c. If local == remote, check for content mismatch. Record if necessary and pop both again.
+	comparison := &ManifestComparison{}
+	local := localManifest.PopOrNil()
+	remote := remoteManifest.PopOrNil()
+	for local != nil || remote != nil {
+		if local == nil || local.Path > remote.Path {
+			comparison.OnlyRemote = append(comparison.OnlyRemote, remote.Path)
+			comparison.Misses++
+			remote = remoteManifest.PopOrNil()
+		} else if remote == nil || local.Path < remote.Path {
+			comparison.OnlyLocal = append(comparison.OnlyLocal, local.Path)
+			comparison.Misses++
+			local = localManifest.PopOrNil()
+		} else if remote.Path == local.Path {
+			if !compareFileContents(remote, local) {
+				comparison.ContentMismatch = append(comparison.ContentMismatch, local.Path)
+				comparison.Misses++
+			} else {
+				comparison.Matches++
+			}
+			local = localManifest.PopOrNil()
+			remote = remoteManifest.PopOrNil()
+		} else {
+			// This should be unreachable...
+			panic(fmt.Sprintf("Unexpected condition! Local: %v, remote: %v", local, remote))
+		}
 	}
-	return true
+	return comparison
+}
+
+func compareFileContents(remote, local *File) bool {
+	if remote.ContentHash == "" || local.ContentHash == "" {
+		// Missing content hash for one of the files, possibly intentionally,
+		// so can't compare. Assume that presence of both is enough to
+		// validate.
+		return true
+	}
+	return remote.ContentHash == local.ContentHash
+}
+
+func printFileList(files []string, description string) {
+	fmt.Printf("%s: %d\n\n", description, len(files))
+	for _, path := range files {
+		fmt.Println(path)
+	}
+	if len(files) > 0 {
+		fmt.Print("\n\n")
+	}
 }
