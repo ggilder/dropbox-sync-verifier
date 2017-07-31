@@ -17,6 +17,7 @@ import (
 - Add progress printing - maybe collect progress from remote/local listing through channels
 - Test for more case issues - already handling when root folder is lowercased
   by Dropbox, but maybe other path components could be as well?
+- Ignore more file names in skipLocalFile - see https://www.dropbox.com/help/syncing-uploads/files-not-syncing
 */
 
 // File stores the result of either Dropbox API or local file listing
@@ -188,7 +189,7 @@ func getLocalManifest(localRoot string, contentHash bool) (manifest *FileHeap, e
 			return err
 		}
 
-		if info.Mode().IsRegular() {
+		if info.Mode().IsRegular() && !skipLocalFile(entryPath) {
 			relPath, err := normalizePath(localRoot, entryPath)
 			if err != nil {
 				return err
@@ -233,6 +234,14 @@ func normalizePath(root string, entryPath string) (string, error) {
 	// Normalize Unicode combining characters
 	relPath = norm.NFC.String(relPath)
 	return relPath, nil
+}
+
+func skipLocalFile(path string) bool {
+	// TODO handle more ignored file names
+	if filepath.Base(path) == ".DS_Store" {
+		return true
+	}
+	return false
 }
 
 func compareManifests(remoteManifest, localManifest *FileHeap) *ManifestComparison {
