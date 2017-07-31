@@ -12,6 +12,7 @@ import (
 
 /* TODO
 - Clean up output formatting
+- Parallelize local/remote file listing
 */
 
 // File stores the result of either Dropbox API or local file listing
