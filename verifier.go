@@ -12,7 +12,6 @@ import (
 
 /* TODO
 - Clean up output formatting
-- Implement local content hashing (optionally?)
 */
 
 // File stores the result of either Dropbox API or local file listing
@@ -70,9 +69,10 @@ func main() {
 	}
 
 	var opts struct {
-		Verbose    bool   `short:"v" long:"verbose" description:"Show verbose debug information"`
-		RemoteRoot string `short:"r" long:"remote" description:"Directory in Dropbox to verify" default:"/"`
-		LocalRoot  string `short:"l" long:"local" description:"Local directory to compare to Dropbox contents" default:"."`
+		Verbose          bool   `short:"v" long:"verbose" description:"Show verbose debug information"`
+		RemoteRoot       string `short:"r" long:"remote" description:"Directory in Dropbox to verify" default:"/"`
+		LocalRoot        string `short:"l" long:"local" description:"Local directory to compare to Dropbox contents" default:"."`
+		CheckContentHash bool   `long:"check" description:"Check content hash of local files"`
 	}
 
 	_, err := flags.Parse(&opts)
@@ -96,13 +96,17 @@ func main() {
 	dbxClient := dropbox.New(dropbox.NewConfig(token))
 
 	fmt.Printf("Comparing Dropbox directory \"%v\" to local directory \"%v\"\n", opts.RemoteRoot, localRoot)
+	if opts.CheckContentHash {
+		fmt.Println("Checking content hashes.")
+	}
+	fmt.Println("")
 
 	dropboxManifest, err := getDropboxManifest(dbxClient, opts.RemoteRoot)
 	if err != nil {
 		panic(err)
 	}
 
-	localManifest, err := getLocalManifest(localRoot)
+	localManifest, err := getLocalManifest(localRoot, opts.CheckContentHash)
 	if err != nil {
 		panic(err)
 	}
@@ -113,12 +117,9 @@ func main() {
 	printFileList(manifestComparison.OnlyLocal, "Files only in local")
 	printFileList(manifestComparison.ContentMismatch, "Files whose contents don't match")
 	total := manifestComparison.Matches + manifestComparison.Misses
-	percentString := "(empty)"
-	if total > 0 {
-		matchPercent := 100.0 * float64(manifestComparison.Matches) / float64(total)
-		percentString = fmt.Sprintf("(%d%%)", int(matchPercent))
-	}
-	fmt.Printf("Files matched: %d/%d %s\n", manifestComparison.Matches, total, percentString)
+	fmt.Println("SUMMARY:")
+	fmt.Printf("Files matched: %d/%d\n", manifestComparison.Matches, total)
+	fmt.Printf("Files not matched: %d/%d\n", manifestComparison.Misses, total)
 }
 
 func getDropboxManifest(dbxClient *dropbox.Client, rootPath string) (manifest *FileHeap, err error) {
@@ -170,7 +171,7 @@ func getDropboxManifest(dbxClient *dropbox.Client, rootPath string) (manifest *F
 	return
 }
 
-func getLocalManifest(localRoot string) (manifest *FileHeap, err error) {
+func getLocalManifest(localRoot string, contentHash bool) (manifest *FileHeap, err error) {
 	manifest = &FileHeap{}
 	heap.Init(manifest)
 
@@ -185,9 +186,17 @@ func getLocalManifest(localRoot string) (manifest *FileHeap, err error) {
 				return err
 			}
 
+			hash := ""
+			if contentHash {
+				hash, err = dropbox.FileContentHash(entryPath)
+				if err != nil {
+					return err
+				}
+			}
+
 			heap.Push(manifest, &File{
 				Path:        relPath,
-				ContentHash: "",
+				ContentHash: hash,
 			})
 		}
 
