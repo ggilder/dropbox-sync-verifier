@@ -14,6 +14,7 @@ import (
 - Clean up output formatting
 - Parallelize local/remote file listing
 - Add progress printing - maybe collect progress from remote/local listing through channels
+- Fix case issues - Dropbox seems to return inconsistent case for directories sometimes!
 */
 
 // File stores the result of either Dropbox API or local file listing
