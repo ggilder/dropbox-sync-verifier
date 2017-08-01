@@ -159,7 +159,9 @@ func getDropboxManifest(dbxClient *dropbox.Client, rootPath string) (manifest *F
 		}
 		if err != nil {
 			if strings.HasPrefix(err.Error(), "too_many_requests") {
-				fmt.Fprint(os.Stderr, "Dropbox returned too many requests error, sleeping 60 seconds...")
+				fmt.Fprint(os.Stderr, "Dropbox returned too many requests error, sleeping 60 seconds...\n")
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintf(os.Stderr, "Response: %v\n", resp)
 				time.Sleep(60 * time.Second)
 				continue
 			}
