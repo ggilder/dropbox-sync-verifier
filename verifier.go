@@ -13,6 +13,7 @@ import (
 )
 
 /* TODO
+- Catch errors in local file listing (e.g. i/o errors) and track
 - Clean up output formatting
 - Parallelize local/remote file listing
   - Maybe find additional ways to speed up? Generating local hashes is probably
