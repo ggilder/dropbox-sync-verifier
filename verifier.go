@@ -6,18 +6,20 @@ import (
 	"github.com/jessevdk/go-flags"
 	"github.com/tj/go-dropbox"
 	"golang.org/x/text/unicode/norm"
+	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
 /* TODO
+
+- Test if buffered channels improve performance in the parallel local file processing
+- Test other performance tweaks - CPU usage is still low, are the goroutines mostly idle? Could we use more than number of CPUs?
 - Clean up output formatting
-- Parallelize local/remote file listing
-  - Maybe find additional ways to speed up? Generating local hashes is probably
-    largest bottleneck, would this benefit at all from parallelization?
-- Add progress printing - maybe collect progress from remote/local listing through channels
 - Ignore more file names in skipLocalFile - see https://www.dropbox.com/help/syncing-uploads/files-not-syncing
 - Do a real retry + backoff for Dropbox API errors (do we have access to the Retry-After header?)
 */
@@ -71,7 +73,7 @@ type ManifestComparison struct {
 	OnlyRemote      []string
 	OnlyLocal       []string
 	ContentMismatch []string
-	Errored         []FileError
+	Errored         []*FileError
 	Matches         int
 	Misses          int
 }
@@ -88,6 +90,7 @@ func main() {
 		RemoteRoot       string `short:"r" long:"remote" description:"Directory in Dropbox to verify" default:"/"`
 		LocalRoot        string `short:"l" long:"local" description:"Local directory to compare to Dropbox contents" default:"."`
 		CheckContentHash bool   `long:"check" description:"Check content hash of local files"`
+		WorkerCount      int    `short:"w" long:"workers" description:"Number of worker threads to use (defaults to number of CPUs)"`
 	}
 
 	_, err := flags.Parse(&opts)
@@ -124,7 +127,7 @@ func main() {
 	// so we can see how many results from dropbox we're counting up to
 	fmt.Println("")
 
-	localManifest, errored, err := getLocalManifest(localRoot, opts.CheckContentHash)
+	localManifest, errored, err := getLocalManifest(localRoot, opts.CheckContentHash, opts.WorkerCount)
 	if err != nil {
 		panic(err)
 	}
@@ -212,46 +215,102 @@ func getDropboxManifest(dbxClient *dropbox.Client, rootPath string) (manifest *F
 	return
 }
 
-func getLocalManifest(localRoot string, contentHash bool) (manifest *FileHeap, errored []FileError, err error) {
+func getLocalManifest(localRoot string, contentHash bool, workerCount int) (manifest *FileHeap, errored []*FileError, err error) {
+	localRootLowercase := strings.ToLower(localRoot)
 	manifest = &FileHeap{}
 	heap.Init(manifest)
-	localRootLowercase := strings.ToLower(localRoot)
+	if workerCount <= 0 {
+		workerCount = int(math.Max(1, float64(runtime.NumCPU())))
+	}
+	processChan := make(chan string)
+	resultChan := make(chan *File)
+	errorChan := make(chan *FileError)
+	var wg sync.WaitGroup
 
-	err = filepath.Walk(localRoot, func(entryPath string, info os.FileInfo, err error) error {
-		if err != nil {
-			errored = append(errored, FileError{Path: entryPath, Error: err})
-			return nil
-		}
+	for i := 0; i < workerCount; i++ {
+		// spin up workers
+		wg.Add(1)
+		go handleLocalFile(localRootLowercase, contentHash, processChan, resultChan, errorChan, &wg)
+	}
 
-		if info.Mode().IsRegular() && !skipLocalFile(entryPath) {
-			relPath, err := normalizePath(localRootLowercase, strings.ToLower(entryPath))
+	// walk in separate goroutine so that sends to errorChan don't block
+	go func() {
+		filepath.Walk(localRoot, func(entryPath string, info os.FileInfo, err error) error {
 			if err != nil {
-				errored = append(errored, FileError{Path: entryPath, Error: err})
+				errorChan <- &FileError{Path: entryPath, Error: err}
 				return nil
 			}
 
-			hash := ""
-			if contentHash {
-				hash, err = dropbox.FileContentHash(entryPath)
-				if err != nil {
-					errored = append(errored, FileError{Path: relPath, Error: err})
-					return nil
-				}
+			if info.Mode().IsRegular() && !skipLocalFile(entryPath) {
+				processChan <- entryPath
 			}
 
-			heap.Push(manifest, &File{
-				Path:        relPath,
-				ContentHash: hash,
-			})
+			return nil
+		})
 
-			// DEBUG info
-			fmt.Fprintf(os.Stderr, "%d local files listed (%d errors)    \r", manifest.Len(), len(errored))
+		close(processChan)
+	}()
+
+	// Once processing goroutines are done, close result and error channels to indicate no more results streaming in
+	go func() {
+		wg.Wait()
+		close(resultChan)
+		close(errorChan)
+	}()
+
+	for {
+		select {
+		case result, ok := <-resultChan:
+			if ok {
+				heap.Push(manifest, result)
+			} else {
+				resultChan = nil
+			}
+
+		case e, ok := <-errorChan:
+			if ok {
+				errored = append(errored, e)
+			} else {
+				errorChan = nil
+			}
 		}
 
-		return nil
-	})
+		// DEBUG info
+		fmt.Fprintf(os.Stderr, "%d local files listed (%d errors) (%d workers)    \r", manifest.Len(), len(errored), workerCount)
+
+		if resultChan == nil && errorChan == nil {
+			break
+		}
+	}
 
 	return
+}
+
+// fill in args etc
+func handleLocalFile(localRootLowercase string, contentHash bool, processChan <-chan string, resultChan chan<- *File, errorChan chan<- *FileError, wg *sync.WaitGroup) {
+	for entryPath := range processChan {
+
+		relPath, err := normalizePath(localRootLowercase, strings.ToLower(entryPath))
+		if err != nil {
+			errorChan <- &FileError{Path: entryPath, Error: err}
+			continue
+		}
+
+		hash := ""
+		if contentHash {
+			hash, err = dropbox.FileContentHash(entryPath)
+			if err != nil {
+				errorChan <- &FileError{Path: relPath, Error: err}
+				continue
+			}
+		}
+
+		resultChan <- &File{
+			Path:        relPath,
+			ContentHash: hash,
+		}
+	}
+	wg.Done()
 }
 
 func normalizePath(root string, entryPath string) (string, error) {
@@ -279,7 +338,7 @@ func skipLocalFile(path string) bool {
 	return false
 }
 
-func compareManifests(remoteManifest, localManifest *FileHeap, errored []FileError) *ManifestComparison {
+func compareManifests(remoteManifest, localManifest *FileHeap, errored []*FileError) *ManifestComparison {
 	// 1. Pop a path off both remote and local manifests.
 	// 2. While remote & local are both not nil:
 	//    Compare remote & local:
