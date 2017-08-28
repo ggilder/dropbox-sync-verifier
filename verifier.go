@@ -13,7 +13,6 @@ import (
 )
 
 /* TODO
-- Catch errors in local file listing (e.g. i/o errors) and track
 - Clean up output formatting
 - Parallelize local/remote file listing
   - Maybe find additional ways to speed up? Generating local hashes is probably
@@ -29,6 +28,12 @@ import (
 type File struct {
 	Path        string
 	ContentHash string
+}
+
+// FileError records a local file that could not be read due to an error
+type FileError struct {
+	Path  string
+	Error error
 }
 
 // FileHeap is a list of Files sorted by path
@@ -68,6 +73,7 @@ type ManifestComparison struct {
 	OnlyRemote      []string
 	OnlyLocal       []string
 	ContentMismatch []string
+	Errored         []FileError
 	Matches         int
 	Misses          int
 }
@@ -117,17 +123,29 @@ func main() {
 		panic(err)
 	}
 
-	localManifest, err := getLocalManifest(localRoot, opts.CheckContentHash)
+	localManifest, errored, err := getLocalManifest(localRoot, opts.CheckContentHash)
 	if err != nil {
 		panic(err)
 	}
 
-	manifestComparison := compareManifests(dropboxManifest, localManifest)
+	manifestComparison := compareManifests(dropboxManifest, localManifest, errored)
 
 	fmt.Println("")
+
 	printFileList(manifestComparison.OnlyRemote, "Files only in remote")
 	printFileList(manifestComparison.OnlyLocal, "Files only in local")
 	printFileList(manifestComparison.ContentMismatch, "Files whose contents don't match")
+
+	fmt.Printf("Errored: %d\n\n", len(manifestComparison.Errored))
+	if len(manifestComparison.Errored) > 0 {
+		for _, rec := range manifestComparison.Errored {
+			fmt.Printf("%s: %s\n", rec.Path, rec.Error)
+		}
+		if len(manifestComparison.Errored) > 0 {
+			fmt.Print("\n\n")
+		}
+	}
+
 	total := manifestComparison.Matches + manifestComparison.Misses
 	fmt.Println("SUMMARY:")
 	fmt.Printf("Files matched: %d/%d\n", manifestComparison.Matches, total)
@@ -193,26 +211,29 @@ func getDropboxManifest(dbxClient *dropbox.Client, rootPath string) (manifest *F
 	return
 }
 
-func getLocalManifest(localRoot string, contentHash bool) (manifest *FileHeap, err error) {
+func getLocalManifest(localRoot string, contentHash bool) (manifest *FileHeap, errored []FileError, err error) {
 	manifest = &FileHeap{}
 	heap.Init(manifest)
 
 	err = filepath.Walk(localRoot, func(entryPath string, info os.FileInfo, err error) error {
 		if err != nil {
-			return err
+			errored = append(errored, FileError{Path: entryPath, Error: err})
+			return nil
 		}
 
 		if info.Mode().IsRegular() && !skipLocalFile(entryPath) {
 			relPath, err := normalizePath(localRoot, entryPath)
 			if err != nil {
-				return err
+				errored = append(errored, FileError{Path: entryPath, Error: err})
+				return nil
 			}
 
 			hash := ""
 			if contentHash {
 				hash, err = dropbox.FileContentHash(entryPath)
 				if err != nil {
-					return err
+					errored = append(errored, FileError{Path: relPath, Error: err})
+					return nil
 				}
 			}
 
@@ -222,7 +243,7 @@ func getLocalManifest(localRoot string, contentHash bool) (manifest *FileHeap, e
 			})
 
 			// DEBUG info
-			fmt.Fprintf(os.Stderr, "%d local files listed          \r", manifest.Len())
+			fmt.Fprintf(os.Stderr, "%d local files listed (%d errors)    \r", manifest.Len(), len(errored))
 		}
 
 		return nil
@@ -256,14 +277,14 @@ func skipLocalFile(path string) bool {
 	return false
 }
 
-func compareManifests(remoteManifest, localManifest *FileHeap) *ManifestComparison {
+func compareManifests(remoteManifest, localManifest *FileHeap, errored []FileError) *ManifestComparison {
 	// 1. Pop a path off both remote and local manifests.
 	// 2. While remote & local are both not nil:
 	//    Compare remote & local:
 	//    a. If local is nil or local > remote, this file is only in remote. Record and pop remote again.
 	//    b. If remote is nil or local < remote, this file is only in local. Record and pop local again.
 	//    c. If local == remote, check for content mismatch. Record if necessary and pop both again.
-	comparison := &ManifestComparison{}
+	comparison := &ManifestComparison{Errored: errored}
 	local := localManifest.PopOrNil()
 	remote := remoteManifest.PopOrNil()
 	for local != nil || remote != nil {
