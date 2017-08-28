@@ -169,12 +169,13 @@ func main() {
 
 			fmt.Fprintf(os.Stderr, "Scanning: %d (remote) %d (local) %d (errored)\r", remoteCount, localCount, errorCount)
 		}
-		fmt.Fprintf(os.Stderr, "\nDone collecting progress reports")
+		fmt.Fprintf(os.Stderr, "\n")
 	}()
 
 	// wait until remote and local scans are complete, then close progress reporting channel
 	wg.Wait()
 	close(progressChan)
+	fmt.Printf("\nGenerated manifests for %d remote files, %d local files, with %d local errors\n\n", dropboxManifest.Len(), localManifest.Len(), len(errored))
 
 	// check for fatal errors
 	if dropboxErr != nil {
