@@ -18,8 +18,6 @@ import (
   - Maybe find additional ways to speed up? Generating local hashes is probably
     largest bottleneck, would this benefit at all from parallelization?
 - Add progress printing - maybe collect progress from remote/local listing through channels
-- Test for more case issues - already handling when root folder is lowercased
-  by Dropbox, but maybe other path components could be as well?
 - Ignore more file names in skipLocalFile - see https://www.dropbox.com/help/syncing-uploads/files-not-syncing
 - Do a real retry + backoff for Dropbox API errors (do we have access to the Retry-After header?)
 */
@@ -190,7 +188,7 @@ func getDropboxManifest(dbxClient *dropbox.Client, rootPath string) (manifest *F
 			if entry.Tag == "file" {
 
 				var relPath string
-				relPath, err = normalizePath(rootPath, entry.PathDisplay)
+				relPath, err = normalizePath(rootPath, entry.PathLower)
 				if err != nil {
 					return
 				}
@@ -214,6 +212,7 @@ func getDropboxManifest(dbxClient *dropbox.Client, rootPath string) (manifest *F
 func getLocalManifest(localRoot string, contentHash bool) (manifest *FileHeap, errored []FileError, err error) {
 	manifest = &FileHeap{}
 	heap.Init(manifest)
+	localRootLowercase := strings.ToLower(localRoot)
 
 	err = filepath.Walk(localRoot, func(entryPath string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -222,7 +221,7 @@ func getLocalManifest(localRoot string, contentHash bool) (manifest *FileHeap, e
 		}
 
 		if info.Mode().IsRegular() && !skipLocalFile(entryPath) {
-			relPath, err := normalizePath(localRoot, entryPath)
+			relPath, err := normalizePath(localRootLowercase, strings.ToLower(entryPath))
 			if err != nil {
 				errored = append(errored, FileError{Path: entryPath, Error: err})
 				return nil
