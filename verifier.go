@@ -17,8 +17,10 @@ import (
 
 /* TODO
 
-- Test if buffered channels improve performance in the parallel local file processing
-- Test other performance tweaks - CPU usage is still low, are the goroutines mostly idle? Could we use more than number of CPUs?
+- Performance improvements:
+	- Test if buffered channels improve performance in the parallel local file processing
+	- Profile to find other bottlenecks?
+	- Could printing progress for each local file result slow things down?
 - Clean up output formatting
 - Ignore more file names in skipLocalFile - see https://www.dropbox.com/help/syncing-uploads/files-not-syncing
 - Do a real retry + backoff for Dropbox API errors (do we have access to the Retry-After header?)
@@ -78,6 +80,19 @@ type ManifestComparison struct {
 	Misses          int
 }
 
+type progressType int
+
+const (
+	remoteProgress progressType = iota
+	localProgress
+	errorProgress
+)
+
+type scanProgressUpdate struct {
+	Type  progressType
+	Count int
+}
+
 func main() {
 	token := os.Getenv("DROPBOX_ACCESS_TOKEN")
 	if token == "" {
@@ -90,7 +105,7 @@ func main() {
 		RemoteRoot       string `short:"r" long:"remote" description:"Directory in Dropbox to verify" default:"/"`
 		LocalRoot        string `short:"l" long:"local" description:"Local directory to compare to Dropbox contents" default:"."`
 		CheckContentHash bool   `long:"check" description:"Check content hash of local files"`
-		WorkerCount      int    `short:"w" long:"workers" description:"Number of worker threads to use (defaults to number of CPUs)"`
+		WorkerCount      int    `short:"w" long:"workers" description:"Number of worker threads to use (defaults to 8)" default:"8"`
 	}
 
 	_, err := flags.Parse(&opts)
@@ -119,17 +134,54 @@ func main() {
 	}
 	fmt.Println("")
 
-	dropboxManifest, err := getDropboxManifest(dbxClient, opts.RemoteRoot)
-	if err != nil {
-		panic(err)
+	progressChan := make(chan *scanProgressUpdate)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	var dropboxManifest *FileHeap
+	var dropboxErr error
+	go func() {
+		dropboxManifest, dropboxErr = getDropboxManifest(progressChan, dbxClient, opts.RemoteRoot)
+		wg.Done()
+	}()
+
+	var localManifest *FileHeap
+	var errored []*FileError
+	var localErr error
+	go func() {
+		localManifest, errored, localErr = getLocalManifest(progressChan, localRoot, opts.CheckContentHash, opts.WorkerCount)
+		wg.Done()
+	}()
+
+	go func() {
+		remoteCount := 0
+		localCount := 0
+		errorCount := 0
+		for update := range progressChan {
+			switch update.Type {
+			case remoteProgress:
+				remoteCount = update.Count
+			case localProgress:
+				localCount = update.Count
+			case errorProgress:
+				errorCount = update.Count
+			}
+
+			fmt.Fprintf(os.Stderr, "Scanning: %d (remote) %d (local) %d (errored)\r", remoteCount, localCount, errorCount)
+		}
+		fmt.Fprintf(os.Stderr, "\nDone collecting progress reports")
+	}()
+
+	// wait until remote and local scans are complete, then close progress reporting channel
+	wg.Wait()
+	close(progressChan)
+
+	// check for fatal errors
+	if dropboxErr != nil {
+		panic(dropboxErr)
 	}
-
-	// so we can see how many results from dropbox we're counting up to
-	fmt.Println("")
-
-	localManifest, errored, err := getLocalManifest(localRoot, opts.CheckContentHash, opts.WorkerCount)
-	if err != nil {
-		panic(err)
+	if localErr != nil {
+		panic(localErr)
 	}
 
 	manifestComparison := compareManifests(dropboxManifest, localManifest, errored)
@@ -156,7 +208,7 @@ func main() {
 	fmt.Printf("Files not matched: %d/%d\n", manifestComparison.Misses, total)
 }
 
-func getDropboxManifest(dbxClient *dropbox.Client, rootPath string) (manifest *FileHeap, err error) {
+func getDropboxManifest(progressChan chan<- *scanProgressUpdate, dbxClient *dropbox.Client, rootPath string) (manifest *FileHeap, err error) {
 	manifest = &FileHeap{}
 	heap.Init(manifest)
 	cursor := ""
@@ -208,14 +260,13 @@ func getDropboxManifest(dbxClient *dropbox.Client, rootPath string) (manifest *F
 		cursor = resp.Cursor
 		keepGoing = resp.HasMore
 
-		// DEBUG info
-		fmt.Fprintf(os.Stderr, "%d dropbox files listed          \r", manifest.Len())
+		progressChan <- &scanProgressUpdate{Type: remoteProgress, Count: manifest.Len()}
 	}
 
 	return
 }
 
-func getLocalManifest(localRoot string, contentHash bool, workerCount int) (manifest *FileHeap, errored []*FileError, err error) {
+func getLocalManifest(progressChan chan<- *scanProgressUpdate, localRoot string, contentHash bool, workerCount int) (manifest *FileHeap, errored []*FileError, err error) {
 	localRootLowercase := strings.ToLower(localRoot)
 	manifest = &FileHeap{}
 	heap.Init(manifest)
@@ -263,6 +314,7 @@ func getLocalManifest(localRoot string, contentHash bool, workerCount int) (mani
 		case result, ok := <-resultChan:
 			if ok {
 				heap.Push(manifest, result)
+				progressChan <- &scanProgressUpdate{Type: localProgress, Count: manifest.Len()}
 			} else {
 				resultChan = nil
 			}
@@ -270,13 +322,11 @@ func getLocalManifest(localRoot string, contentHash bool, workerCount int) (mani
 		case e, ok := <-errorChan:
 			if ok {
 				errored = append(errored, e)
+				progressChan <- &scanProgressUpdate{Type: errorProgress, Count: len(errored)}
 			} else {
 				errorChan = nil
 			}
 		}
-
-		// DEBUG info
-		fmt.Fprintf(os.Stderr, "%d local files listed (%d errors) (%d workers)    \r", manifest.Len(), len(errored), workerCount)
 
 		if resultChan == nil && errorChan == nil {
 			break
