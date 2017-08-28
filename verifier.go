@@ -121,6 +121,9 @@ func main() {
 		panic(err)
 	}
 
+	// so we can see how many results from dropbox we're counting up to
+	fmt.Println("")
+
 	localManifest, errored, err := getLocalManifest(localRoot, opts.CheckContentHash)
 	if err != nil {
 		panic(err)
