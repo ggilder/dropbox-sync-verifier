@@ -250,7 +250,6 @@ func normalizePath(root string, entryPath string) (string, error) {
 }
 
 func skipLocalFile(path string) bool {
-	// TODO handle more ignored file names
 	if filepath.Base(path) == ".DS_Store" {
 		return true
 	}
