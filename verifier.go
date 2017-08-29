@@ -293,6 +293,10 @@ func getLocalManifest(progressChan chan<- *scanProgressUpdate, localRoot string,
 				return nil
 			}
 
+			if info.Mode().IsDir() && skipLocalDir(entryPath) {
+				return filepath.SkipDir
+			}
+
 			if info.Mode().IsRegular() && !skipLocalFile(entryPath) {
 				processChan <- entryPath
 			}
@@ -384,6 +388,13 @@ func normalizePath(root string, entryPath string) (string, error) {
 
 func skipLocalFile(path string) bool {
 	if filepath.Base(path) == ".DS_Store" {
+		return true
+	}
+	return false
+}
+
+func skipLocalDir(path string) bool {
+	if filepath.Base(path) == "@eaDir" {
 		return true
 	}
 	return false
