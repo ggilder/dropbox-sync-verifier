@@ -15,12 +15,13 @@ import (
 	"time"
 )
 
-/* TODO
-
+/*
+TODO
 - Performance improvements:
 	- Test if buffered channels improve performance in the parallel local file processing
 	- Profile to find other bottlenecks?
-	- Could printing progress for each local file result slow things down?
+	- Could printing progress for each local file result slow things down? (When processing lots of small files)
+- Print I/O usage? i.e. how many MB/s are we processing
 - Clean up output formatting
 - Ignore more file names in skipLocalFile - see https://www.dropbox.com/help/syncing-uploads/files-not-syncing
 - Do a real retry + backoff for Dropbox API errors (do we have access to the Retry-After header?)
