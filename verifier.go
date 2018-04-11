@@ -168,7 +168,9 @@ func main() {
 				errorCount = update.Count
 			}
 
-			fmt.Fprintf(os.Stderr, "Scanning: %d (remote) %d (local) %d (errored)\r", remoteCount, localCount, errorCount)
+			if opts.Verbose {
+				fmt.Fprintf(os.Stderr, "Scanning: %d (remote) %d (local) %d (errored)\r", remoteCount, localCount, errorCount)
+			}
 		}
 		fmt.Fprintf(os.Stderr, "\n")
 	}()
