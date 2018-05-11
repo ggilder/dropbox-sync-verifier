@@ -237,6 +237,7 @@ func getDropboxManifest(progressChan chan<- *scanProgressUpdate, dbxClient *drop
 			resp, err = dbxClient.Files.ListFolder(arg)
 		}
 		if err != nil {
+			// TODO: submit feature request for dropbox client to expose retry_after param
 			if strings.HasPrefix(err.Error(), "too_many_requests") {
 				fmt.Fprintf(os.Stderr, "\n[%s] Dropbox returned too many requests error, sleeping 60 seconds\n", time.Now().Format("15:04:05"))
 				// fmt.Fprintf(os.Stderr, "Error: %v\n", err)
