@@ -217,6 +217,7 @@ func getDropboxManifest(progressChan chan<- *scanProgressUpdate, dbxClient *drop
 	heap.Init(manifest)
 	cursor := ""
 	keepGoing := true
+	retryCount := 0
 
 	for keepGoing {
 		var resp *dropbox.ListFolderOutput
@@ -239,14 +240,25 @@ func getDropboxManifest(progressChan chan<- *scanProgressUpdate, dbxClient *drop
 		if err != nil {
 			// TODO: submit feature request for dropbox client to expose retry_after param
 			if strings.HasPrefix(err.Error(), "too_many_requests") {
-				fmt.Fprintf(os.Stderr, "\n[%s] Dropbox returned too many requests error, sleeping 60 seconds\n", time.Now().Format("15:04:05"))
+				fmt.Fprintf(os.Stderr, "\n[%s] [%d retries] Dropbox returned too many requests error, sleeping 60 seconds\n", time.Now().Format("15:04:05"), retryCount)
 				// fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				// fmt.Fprintf(os.Stderr, "Response: %v\n", resp)
+				retryCount++
 				time.Sleep(60 * time.Second)
 				continue
+			} else if retryCount < 10 { // TODO extract this magic number
+				fmt.Fprintf(os.Stderr, "\n[%s] [%d retries] Error: %s - sleeping 1 second and retrying\n", time.Now().Format("15:04:05"), err, retryCount)
+				fmt.Fprintf(os.Stderr, "Full Error: %+v\n", err)
+				retryCount++
+				time.Sleep(1 * time.Second)
+				continue
+			} else {
+				fmt.Fprintf(os.Stderr, "\n[%s] Hit maximum of %d retries; aborting.\n", time.Now().Format("15:04:05"), retryCount)
+				return
 			}
-			return
 		}
+		// call was successful, reset retryCount
+		retryCount = 0
 		for _, entry := range resp.Entries {
 			if entry.Tag == "file" {
 
