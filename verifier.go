@@ -248,7 +248,7 @@ func getDropboxManifest(progressChan chan<- *scanProgressUpdate, dbxClient *drop
 				continue
 			} else if retryCount < 10 { // TODO extract this magic number
 				fmt.Fprintf(os.Stderr, "\n[%s] [%d retries] Error: %s - sleeping 1 second and retrying\n", time.Now().Format("15:04:05"), retryCount, err)
-				fmt.Fprintf(os.Stderr, "Full Error: %+v\n", err)
+				fmt.Fprintf(os.Stderr, "Full Error: %#v\n", err)
 				retryCount++
 				time.Sleep(1 * time.Second)
 				continue
