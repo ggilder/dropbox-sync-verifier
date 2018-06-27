@@ -15,6 +15,10 @@ import (
 	"time"
 )
 
+// Uncomment the following to allow profiling via http
+// import "net/http"
+// import _ "net/http/pprof"
+
 /*
 TODO
 - Performance improvements:
@@ -100,6 +104,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Missing Dropbox OAuth token! Please set the DROPBOX_ACCESS_TOKEN environment variable.")
 		os.Exit(1)
 	}
+
+	// Uncomment the following to allow profiling via http
+	// go func() {
+	// 	fmt.Println(http.ListenAndServe("localhost:6060", nil))
+	// }()
 
 	var opts struct {
 		Verbose          bool   `short:"v" long:"verbose" description:"Show verbose debug information"`
