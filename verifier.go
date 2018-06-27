@@ -3,6 +3,7 @@ package main
 import (
 	"container/heap"
 	"fmt"
+	"github.com/dustin/go-humanize"
 	"github.com/jessevdk/go-flags"
 	"github.com/tj/go-dropbox"
 	"golang.org/x/text/unicode/norm"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -111,11 +113,12 @@ func main() {
 	// }()
 
 	var opts struct {
-		Verbose          bool   `short:"v" long:"verbose" description:"Show verbose debug information"`
-		RemoteRoot       string `short:"r" long:"remote" description:"Directory in Dropbox to verify" default:"/"`
-		LocalRoot        string `short:"l" long:"local" description:"Local directory to compare to Dropbox contents" default:"."`
-		CheckContentHash bool   `long:"check" description:"Check content hash of local files"`
-		WorkerCount      int    `short:"w" long:"workers" description:"Number of worker threads to use (defaults to 8)" default:"8"`
+		Verbose            bool   `short:"v" long:"verbose" description:"Show verbose debug information"`
+		RemoteRoot         string `short:"r" long:"remote" description:"Directory in Dropbox to verify" default:"/"`
+		LocalRoot          string `short:"l" long:"local" description:"Local directory to compare to Dropbox contents" default:"."`
+		CheckContentHash   bool   `long:"check" description:"Check content hash of local files"`
+		WorkerCount        int    `short:"w" long:"workers" description:"Number of worker threads to use (defaults to 8)" default:"8"`
+		FreeMemoryInterval int    `long:"free-memory-interval" description:"Interval (in seconds) to manually release unused memory back to the OS on low-memory systems" default:"0"`
 	}
 
 	_, err := flags.Parse(&opts)
@@ -183,6 +186,35 @@ func main() {
 		}
 		fmt.Fprintf(os.Stderr, "\n")
 	}()
+
+	// set up manual garbage collection routine
+	if opts.FreeMemoryInterval > 0 {
+		go func() {
+			for range time.Tick(time.Duration(opts.FreeMemoryInterval) * time.Second) {
+				var m, m2 runtime.MemStats
+				if opts.Verbose {
+					runtime.ReadMemStats(&m)
+				}
+				debug.FreeOSMemory()
+				if opts.Verbose {
+					runtime.ReadMemStats(&m2)
+					fmt.Fprintf(
+						os.Stderr,
+						"\n[%s] Alloc: %s -> %s / Sys: %s -> %s / HeapInuse: %s -> %s / HeapReleased: %s -> %s\n",
+						time.Now().Format("15:04:05"),
+						humanize.Bytes(m.Alloc),
+						humanize.Bytes(m2.Alloc),
+						humanize.Bytes(m.Sys),
+						humanize.Bytes(m2.Sys),
+						humanize.Bytes(m.HeapInuse),
+						humanize.Bytes(m2.HeapInuse),
+						humanize.Bytes(m.HeapReleased),
+						humanize.Bytes(m2.HeapReleased),
+					)
+				}
+			}
+		}()
+	}
 
 	// wait until remote and local scans are complete, then close progress reporting channel
 	wg.Wait()
