@@ -117,7 +117,7 @@ func main() {
 		Verbose            bool   `short:"v" long:"verbose" description:"Show verbose debug information"`
 		RemoteRoot         string `short:"r" long:"remote" description:"Directory in Dropbox to verify" default:""`
 		LocalRoot          string `short:"l" long:"local" description:"Local directory to compare to Dropbox contents" default:"."`
-		CheckContentHash   bool   `long:"check" description:"Check content hash of local files"`
+		SkipContentHash    bool   `long:"skip-hash" description:"Skip checking content hash of local files"`
 		WorkerCount        int    `short:"w" long:"workers" description:"Number of worker threads to use (defaults to 8)" default:"8"`
 		FreeMemoryInterval int    `long:"free-memory-interval" description:"Interval (in seconds) to manually release unused memory back to the OS on low-memory systems" default:"0"`
 	}
@@ -144,7 +144,7 @@ func main() {
 	dbxClient := dropbox.New(dropbox.NewConfig(token))
 
 	fmt.Printf("Comparing Dropbox directory \"%v\" to local directory \"%v\"\n", remoteRoot, localRoot)
-	if opts.CheckContentHash {
+	if !opts.SkipContentHash {
 		fmt.Println("Checking content hashes.")
 	}
 	fmt.Println("")
@@ -164,7 +164,7 @@ func main() {
 	var errored []*FileError
 	var localErr error
 	go func() {
-		localManifest, errored, localErr = getLocalManifest(progressChan, localRoot, opts.CheckContentHash, opts.WorkerCount)
+		localManifest, errored, localErr = getLocalManifest(progressChan, localRoot, opts.SkipContentHash, opts.WorkerCount)
 		wg.Done()
 	}()
 
@@ -341,7 +341,8 @@ func getDropboxManifest(progressChan chan<- *scanProgressUpdate, dbxClient *drop
 	return
 }
 
-func getLocalManifest(progressChan chan<- *scanProgressUpdate, localRoot string, contentHash bool, workerCount int) (manifest *FileHeap, errored []*FileError, err error) {
+func getLocalManifest(progressChan chan<- *scanProgressUpdate, localRoot string, skipContentHash bool, workerCount int) (manifest *FileHeap, errored []*FileError, err error) {
+	contentHash := !skipContentHash
 	localRootLowercase := strings.ToLower(localRoot)
 	manifest = &FileHeap{}
 	heap.Init(manifest)
