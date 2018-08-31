@@ -9,6 +9,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
@@ -114,7 +115,7 @@ func main() {
 
 	var opts struct {
 		Verbose            bool   `short:"v" long:"verbose" description:"Show verbose debug information"`
-		RemoteRoot         string `short:"r" long:"remote" description:"Directory in Dropbox to verify" default:"/"`
+		RemoteRoot         string `short:"r" long:"remote" description:"Directory in Dropbox to verify" default:""`
 		LocalRoot          string `short:"l" long:"local" description:"Local directory to compare to Dropbox contents" default:"."`
 		CheckContentHash   bool   `long:"check" description:"Check content hash of local files"`
 		WorkerCount        int    `short:"w" long:"workers" description:"Number of worker threads to use (defaults to 8)" default:"8"`
@@ -127,21 +128,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	localRoot, _ := filepath.Abs(opts.LocalRoot)
+
 	// Dropbox API uses empty string for root, but for figuring out relative
 	// paths of the returned entries it's easier to use "/". Conversion is
 	// handled before the API call.
-	if opts.RemoteRoot == "" {
-		opts.RemoteRoot = "/"
+	remoteRoot := opts.RemoteRoot
+	if remoteRoot == "" {
+		remoteRoot = defaultRemoteRoot(localRoot)
 	}
-	if opts.RemoteRoot[0] != '/' {
-		opts.RemoteRoot = "/" + opts.RemoteRoot
+	if remoteRoot[0] != '/' {
+		remoteRoot = "/" + remoteRoot
 	}
-
-	localRoot, _ := filepath.Abs(opts.LocalRoot)
 
 	dbxClient := dropbox.New(dropbox.NewConfig(token))
 
-	fmt.Printf("Comparing Dropbox directory \"%v\" to local directory \"%v\"\n", opts.RemoteRoot, localRoot)
+	fmt.Printf("Comparing Dropbox directory \"%v\" to local directory \"%v\"\n", remoteRoot, localRoot)
 	if opts.CheckContentHash {
 		fmt.Println("Checking content hashes.")
 	}
@@ -154,7 +156,7 @@ func main() {
 	var dropboxManifest *FileHeap
 	var dropboxErr error
 	go func() {
-		dropboxManifest, dropboxErr = getDropboxManifest(progressChan, dbxClient, opts.RemoteRoot)
+		dropboxManifest, dropboxErr = getDropboxManifest(progressChan, dbxClient, remoteRoot)
 		wg.Done()
 	}()
 
@@ -251,6 +253,21 @@ func main() {
 	fmt.Println("SUMMARY:")
 	fmt.Printf("Files matched: %d/%d\n", manifestComparison.Matches, total)
 	fmt.Printf("Files not matched: %d/%d\n", manifestComparison.Misses, total)
+}
+
+func defaultRemoteRoot(localRoot string) string {
+	relPath := ""
+	for {
+		dir, base := path.Split(localRoot)
+		if base == "Dropbox" {
+			return "/" + relPath
+		} else if dir == "" {
+			return "/"
+		} else {
+			relPath = path.Join(base, relPath)
+			localRoot = strings.TrimRight(dir, "/")
+		}
+	}
 }
 
 func getDropboxManifest(progressChan chan<- *scanProgressUpdate, dbxClient *dropbox.Client, rootPath string) (manifest *FileHeap, err error) {
