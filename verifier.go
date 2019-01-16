@@ -119,7 +119,7 @@ func main() {
 		RemoteRoot         string `short:"r" long:"remote" description:"Directory in Dropbox to verify" default:""`
 		LocalRoot          string `short:"l" long:"local" description:"Local directory to compare to Dropbox contents" default:"."`
 		SkipContentHash    bool   `long:"skip-hash" description:"Skip checking content hash of local files"`
-		WorkerCount        int    `short:"w" long:"workers" description:"Number of worker threads to use (defaults to 8)" default:"8"`
+		WorkerCount        int    `short:"w" long:"workers" description:"Number of worker threads to use (defaults to 8) - set to 0 to use all CPU cores" default:"8"`
 		FreeMemoryInterval int    `long:"free-memory-interval" description:"Interval (in seconds) to manually release unused memory back to the OS on low-memory systems" default:"0"`
 	}
 
@@ -148,6 +148,11 @@ func main() {
 	if !opts.SkipContentHash {
 		fmt.Println("Checking content hashes.")
 	}
+	workerCount := opts.WorkerCount
+	if workerCount <= 0 {
+		workerCount = int(math.Max(1, float64(runtime.NumCPU())))
+	}
+	fmt.Printf("Using %d local worker threads.\n", workerCount)
 	fmt.Println("")
 
 	progressChan := make(chan *scanProgressUpdate)
@@ -165,7 +170,7 @@ func main() {
 	var errored []*FileError
 	var localErr error
 	go func() {
-		localManifest, errored, localErr = getLocalManifest(progressChan, localRoot, opts.SkipContentHash, opts.WorkerCount)
+		localManifest, errored, localErr = getLocalManifest(progressChan, localRoot, opts.SkipContentHash, workerCount)
 		wg.Done()
 	}()
 
@@ -347,9 +352,6 @@ func getLocalManifest(progressChan chan<- *scanProgressUpdate, localRoot string,
 	localRootLowercase := strings.ToLower(localRoot)
 	manifest = &FileHeap{}
 	heap.Init(manifest)
-	if workerCount <= 0 {
-		workerCount = int(math.Max(1, float64(runtime.NumCPU())))
-	}
 	processChan := make(chan string)
 	resultChan := make(chan *File)
 	errorChan := make(chan *FileError)
