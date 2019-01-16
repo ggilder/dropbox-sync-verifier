@@ -25,11 +25,12 @@ import (
 /*
 TODO
 - Performance improvements:
+	- Profile to find bottlenecks
 	- Test if buffered channels improve performance in the parallel local file processing
-	- Profile to find other bottlenecks?
 	- Could printing progress for each local file result slow things down? (When processing lots of small files)
-- Print I/O usage? i.e. how many MB/s are we processing
+	- Print I/O usage? i.e. how many MB/s are we processing
 - Clean up output formatting
+	- Consolidate Dropbox error retry printing somehow? Maybe print retries on stderr, print info about error and how many retries it took to stdout
 - Ignore more file names in skipLocalFile - see https://www.dropbox.com/help/syncing-uploads/files-not-syncing
 - Do a real retry + backoff for Dropbox API errors (do we have access to the Retry-After header?)
 */
