@@ -3,10 +3,6 @@ package main
 import (
 	"container/heap"
 	"fmt"
-	"github.com/dustin/go-humanize"
-	"github.com/jessevdk/go-flags"
-	"github.com/tj/go-dropbox"
-	"golang.org/x/text/unicode/norm"
 	"math"
 	"os"
 	"path"
@@ -16,11 +12,14 @@ import (
 	"strings"
 	"sync"
 	"time"
-)
 
-// Uncomment the following to allow profiling via http
-// import "net/http"
-// import _ "net/http/pprof"
+	"github.com/dustin/go-humanize"
+	"github.com/jessevdk/go-flags"
+	"github.com/pkg/profile"
+	"github.com/tj/go-dropbox"
+
+	"golang.org/x/text/unicode/norm"
+)
 
 /*
 TODO
@@ -109,11 +108,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Uncomment the following to allow profiling via http
-	// go func() {
-	// 	fmt.Println(http.ListenAndServe("localhost:6060", nil))
-	// }()
-
 	var opts struct {
 		Verbose            bool   `short:"v" long:"verbose" description:"Show verbose debug information"`
 		RemoteRoot         string `short:"r" long:"remote" description:"Directory in Dropbox to verify" default:""`
@@ -121,12 +115,17 @@ func main() {
 		SkipContentHash    bool   `long:"skip-hash" description:"Skip checking content hash of local files"`
 		WorkerCount        int    `short:"w" long:"workers" description:"Number of worker threads to use (defaults to 8) - set to 0 to use all CPU cores" default:"8"`
 		FreeMemoryInterval int    `long:"free-memory-interval" description:"Interval (in seconds) to manually release unused memory back to the OS on low-memory systems" default:"0"`
+		ProfileMemory      bool   `long:"profile-memory" description:"Generate a pprof memory profile"`
 	}
 
 	_, err := flags.Parse(&opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
+	}
+
+	if opts.ProfileMemory {
+		defer profile.Start(profile.MemProfile).Stop()
 	}
 
 	localRoot, _ := filepath.Abs(opts.LocalRoot)
