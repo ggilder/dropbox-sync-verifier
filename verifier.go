@@ -154,14 +154,14 @@ func main() {
 	fmt.Printf("Using %d local worker threads.\n", workerCount)
 	fmt.Println("")
 
-	progressChan := make(chan *scanProgressUpdate)
+	updateChan := make(chan *scanProgressUpdate)
 	var wg sync.WaitGroup
 	wg.Add(2)
 
 	var dropboxManifest *FileHeap
 	var dropboxErr error
 	go func() {
-		dropboxManifest, dropboxErr = getDropboxManifest(progressChan, dbxClient, remoteRoot)
+		dropboxManifest, dropboxErr = getDropboxManifest(updateChan, dbxClient, remoteRoot)
 		wg.Done()
 	}()
 
@@ -169,7 +169,8 @@ func main() {
 	var errored []*FileError
 	var localErr error
 	go func() {
-		localManifest, errored, localErr = getLocalManifest(progressChan, localRoot, opts.SkipContentHash, workerCount)
+		localDir := NewLocalDirectory(localRoot, opts.SkipContentHash, workerCount)
+		localManifest, errored, localErr = localDir.Manifest(updateChan)
 		wg.Done()
 	}()
 
@@ -177,7 +178,7 @@ func main() {
 		remoteCount := 0
 		localCount := 0
 		errorCount := 0
-		for update := range progressChan {
+		for update := range updateChan {
 			switch update.Type {
 			case remoteProgress:
 				remoteCount = update.Count
@@ -219,7 +220,7 @@ func main() {
 
 	// wait until remote and local scans are complete, then close progress reporting channel
 	wg.Wait()
-	close(progressChan)
+	close(updateChan)
 	fmt.Printf("\nGenerated manifests for %d remote files, %d local files, with %d local errors\n\n", dropboxManifest.Len(), localManifest.Len(), len(errored))
 
 	// check for fatal errors
@@ -269,7 +270,7 @@ func defaultRemoteRoot(localRoot string) string {
 	}
 }
 
-func getDropboxManifest(progressChan chan<- *scanProgressUpdate, dbxClient *dropbox.Client, rootPath string) (manifest *FileHeap, err error) {
+func getDropboxManifest(updateChan chan<- *scanProgressUpdate, dbxClient *dropbox.Client, rootPath string) (manifest *FileHeap, err error) {
 	manifest = &FileHeap{}
 	heap.Init(manifest)
 	cursor := ""
@@ -334,109 +335,10 @@ func getDropboxManifest(progressChan chan<- *scanProgressUpdate, dbxClient *drop
 		cursor = resp.Cursor
 		keepGoing = resp.HasMore
 
-		progressChan <- &scanProgressUpdate{Type: remoteProgress, Count: manifest.Len()}
+		updateChan <- &scanProgressUpdate{Type: remoteProgress, Count: manifest.Len()}
 	}
 
 	return
-}
-
-func getLocalManifest(progressChan chan<- *scanProgressUpdate, localRoot string, skipContentHash bool, workerCount int) (manifest *FileHeap, errored []*FileError, err error) {
-	contentHash := !skipContentHash
-	localRootLowercase := strings.ToLower(localRoot)
-	manifest = &FileHeap{}
-	heap.Init(manifest)
-	processChan := make(chan string)
-	resultChan := make(chan *File)
-	errorChan := make(chan *FileError)
-	var wg sync.WaitGroup
-
-	for i := 0; i < workerCount; i++ {
-		// spin up workers
-		wg.Add(1)
-		go handleLocalFile(localRootLowercase, contentHash, processChan, resultChan, errorChan, &wg)
-	}
-
-	// walk in separate goroutine so that sends to errorChan don't block
-	go func() {
-		filepath.Walk(localRoot, func(entryPath string, info os.FileInfo, err error) error {
-			if err != nil {
-				errorChan <- &FileError{Path: entryPath, Error: err}
-				return nil
-			}
-
-			if info.Mode().IsDir() && skipLocalDir(entryPath) {
-				return filepath.SkipDir
-			}
-
-			if info.Mode().IsRegular() && !skipLocalFile(entryPath) {
-				processChan <- entryPath
-			}
-
-			return nil
-		})
-
-		close(processChan)
-	}()
-
-	// Once processing goroutines are done, close result and error channels to indicate no more results streaming in
-	go func() {
-		wg.Wait()
-		close(resultChan)
-		close(errorChan)
-	}()
-
-	for {
-		select {
-		case result, ok := <-resultChan:
-			if ok {
-				heap.Push(manifest, result)
-				progressChan <- &scanProgressUpdate{Type: localProgress, Count: manifest.Len()}
-			} else {
-				resultChan = nil
-			}
-
-		case e, ok := <-errorChan:
-			if ok {
-				errored = append(errored, e)
-				progressChan <- &scanProgressUpdate{Type: errorProgress, Count: len(errored)}
-			} else {
-				errorChan = nil
-			}
-		}
-
-		if resultChan == nil && errorChan == nil {
-			break
-		}
-	}
-
-	return
-}
-
-// fill in args etc
-func handleLocalFile(localRootLowercase string, contentHash bool, processChan <-chan string, resultChan chan<- *File, errorChan chan<- *FileError, wg *sync.WaitGroup) {
-	for entryPath := range processChan {
-
-		relPath, err := normalizePath(localRootLowercase, strings.ToLower(entryPath))
-		if err != nil {
-			errorChan <- &FileError{Path: entryPath, Error: err}
-			continue
-		}
-
-		hash := ""
-		if contentHash {
-			hash, err = dropbox.FileContentHash(entryPath)
-			if err != nil {
-				errorChan <- &FileError{Path: relPath, Error: err}
-				continue
-			}
-		}
-
-		resultChan <- &File{
-			Path:        relPath,
-			ContentHash: hash,
-		}
-	}
-	wg.Done()
 }
 
 func normalizePath(root string, entryPath string) (string, error) {
@@ -455,20 +357,6 @@ func normalizePath(root string, entryPath string) (string, error) {
 	// Normalize Unicode combining characters
 	relPath = norm.NFC.String(relPath)
 	return relPath, nil
-}
-
-func skipLocalFile(path string) bool {
-	if filepath.Base(path) == ".DS_Store" {
-		return true
-	}
-	return false
-}
-
-func skipLocalDir(path string) bool {
-	if filepath.Base(path) == "@eaDir" {
-		return true
-	}
-	return false
 }
 
 func compareManifests(remoteManifest, localManifest *FileHeap, errored []*FileError) *ManifestComparison {
