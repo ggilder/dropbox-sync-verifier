@@ -199,25 +199,19 @@ func main() {
 	if opts.FreeMemoryInterval > 0 {
 		go func() {
 			for range time.Tick(time.Duration(opts.FreeMemoryInterval) * time.Second) {
-				var m, m2 runtime.MemStats
-				if opts.Verbose {
-					runtime.ReadMemStats(&m)
-				}
 				debug.FreeOSMemory()
 				if opts.Verbose {
-					runtime.ReadMemStats(&m2)
+					var m runtime.MemStats
+					runtime.ReadMemStats(&m)
 					fmt.Fprintf(
 						os.Stderr,
-						"\n[%s] Alloc: %s -> %s / Sys: %s -> %s / HeapInuse: %s -> %s / HeapReleased: %s -> %s\n",
+						"\n[%s] HeapAlloc: %s / HeapInuse: %s / HeapReleased: %s / Sys: %s / GCCPUFraction: %.2f%%\n",
 						time.Now().Format("15:04:05"),
 						humanize.Bytes(m.Alloc),
-						humanize.Bytes(m2.Alloc),
-						humanize.Bytes(m.Sys),
-						humanize.Bytes(m2.Sys),
 						humanize.Bytes(m.HeapInuse),
-						humanize.Bytes(m2.HeapInuse),
 						humanize.Bytes(m.HeapReleased),
-						humanize.Bytes(m2.HeapReleased),
+						humanize.Bytes(m.Sys),
+						m.GCCPUFraction*100,
 					)
 				}
 			}
