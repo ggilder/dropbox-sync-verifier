@@ -28,6 +28,9 @@ TODO
 	- Test if buffered channels improve performance in the parallel local file processing
 	- Could printing progress for each local file result slow things down? (When processing lots of small files)
 	- Print I/O usage? i.e. how many MB/s are we processing
+- Memory usage improvements (if memory continues to be an issue):
+	- Could use smaller representation of content hash (hex string -> fixed size byte array) - would probably cut out 30-35% of manifest size (60-70MB on my file set)
+	- Evaluate heaps earlier to avoid hanging on to the entries that already match? This would increase complexity a lot and maybe require refactoring to use a map
 - Clean up output formatting
 	- Consolidate Dropbox error retry printing somehow? Maybe print retries on stderr, print info about error and how many retries it took to stdout
 - Ignore more file names in skipLocalFile - see https://www.dropbox.com/help/syncing-uploads/files-not-syncing
