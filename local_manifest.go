@@ -111,9 +111,13 @@ func (d *LocalDirectory) Manifest(updateChan chan<- *scanProgressUpdate) (manife
 }
 
 func skipLocalFile(path string) bool {
-	if filepath.Base(path) == ".DS_Store" {
-		return true
+	base := filepath.Base(path)
+	for _, ignoredFile := range ignoredFiles {
+		if base == ignoredFile {
+			return true
+		}
 	}
+
 	return false
 }
 

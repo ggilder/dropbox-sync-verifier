@@ -105,6 +105,7 @@ type scanProgressUpdate struct {
 	Count int
 }
 
+var ignoredFiles = [...]string{"Icon\r", ".DS_Store", ".dropbox"}
 var ignoredDirectories = [...]string{"@eaDir", ".dropbox.cache"}
 
 func main() {
