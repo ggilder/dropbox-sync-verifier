@@ -15,13 +15,15 @@ type LocalDirectory struct {
 	localRoot       string
 	skipContentHash bool
 	workerCount     int
+	subdirectories  []string
 }
 
-func NewLocalDirectory(localRoot string, skipContentHash bool, workerCount int) *LocalDirectory {
+func NewLocalDirectory(localRoot string, subdirectories []string, skipContentHash bool, workerCount int) *LocalDirectory {
 	inst := LocalDirectory{
 		localRoot:       localRoot,
 		skipContentHash: skipContentHash,
 		workerCount:     workerCount,
+		subdirectories:  subdirectories,
 	}
 	return &inst
 }
@@ -44,22 +46,32 @@ func (d *LocalDirectory) Manifest(updateChan chan<- *scanProgressUpdate) (manife
 
 	// walk in separate goroutine so that sends to errorChan don't block
 	go func() {
-		filepath.Walk(d.localRoot, func(entryPath string, info os.FileInfo, err error) error {
-			if err != nil {
-				errorChan <- &FileError{Path: entryPath, Error: err}
+		var pathsToWalk []string
+		if len(d.subdirectories) > 0 {
+			for _, dir := range d.subdirectories {
+				pathsToWalk = append(pathsToWalk, filepath.Join(d.localRoot, dir))
+			}
+		} else {
+			pathsToWalk = append(pathsToWalk, d.localRoot)
+		}
+		for _, path := range pathsToWalk {
+			filepath.Walk(path, func(entryPath string, info os.FileInfo, err error) error {
+				if err != nil {
+					errorChan <- &FileError{Path: entryPath, Error: err}
+					return nil
+				}
+
+				if info.Mode().IsDir() && skipLocalDir(entryPath) {
+					return filepath.SkipDir
+				}
+
+				if info.Mode().IsRegular() && !skipLocalFile(entryPath) {
+					processChan <- entryPath
+				}
+
 				return nil
-			}
-
-			if info.Mode().IsDir() && skipLocalDir(entryPath) {
-				return filepath.SkipDir
-			}
-
-			if info.Mode().IsRegular() && !skipLocalFile(entryPath) {
-				processChan <- entryPath
-			}
-
-			return nil
-		})
+			})
+		}
 
 		close(processChan)
 	}()
@@ -106,8 +118,11 @@ func skipLocalFile(path string) bool {
 }
 
 func skipLocalDir(path string) bool {
-	if filepath.Base(path) == "@eaDir" {
-		return true
+	base := filepath.Base(path)
+	for _, ignore := range ignoredDirectories {
+		if base == ignore {
+			return true
+		}
 	}
 	return false
 }

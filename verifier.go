@@ -3,6 +3,7 @@ package main
 import (
 	"container/heap"
 	"fmt"
+	"io/ioutil"
 	"math"
 	"os"
 	"path"
@@ -104,6 +105,8 @@ type scanProgressUpdate struct {
 	Count int
 }
 
+var ignoredDirectories = [...]string{"@eaDir", ".dropbox.cache"}
+
 func main() {
 	token := os.Getenv("DROPBOX_ACCESS_TOKEN")
 	if token == "" {
@@ -115,6 +118,7 @@ func main() {
 		Verbose            bool   `short:"v" long:"verbose" description:"Show verbose debug information"`
 		RemoteRoot         string `short:"r" long:"remote" description:"Directory in Dropbox to verify" default:""`
 		LocalRoot          string `short:"l" long:"local" description:"Local directory to compare to Dropbox contents" default:"."`
+		SelectiveSync      bool   `long:"selective" description:"Assume local is selectively synced - only check contents of top-level folders in local directory"`
 		SkipContentHash    bool   `long:"skip-hash" description:"Skip checking content hash of local files"`
 		WorkerCount        int    `short:"w" long:"workers" description:"Number of worker threads to use (defaults to 8) - set to 0 to use all CPU cores" default:"8"`
 		FreeMemoryInterval int    `long:"free-memory-interval" description:"Interval (in seconds) to manually release unused memory back to the OS on low-memory systems" default:"0"`
@@ -132,6 +136,14 @@ func main() {
 	}
 
 	localRoot, _ := filepath.Abs(opts.LocalRoot)
+	var localDirs []string
+	if opts.SelectiveSync {
+		localDirs, err = listFolders(opts.LocalRoot)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(1)
+		}
+	}
 
 	// Dropbox API uses empty string for root, but for figuring out relative
 	// paths of the returned entries it's easier to use "/". Conversion is
@@ -146,7 +158,16 @@ func main() {
 
 	dbxClient := dropbox.New(dropbox.NewConfig(token))
 
-	fmt.Printf("Comparing Dropbox directory \"%v\" to local directory \"%v\"\n", remoteRoot, localRoot)
+	if opts.SelectiveSync {
+		fmt.Printf("Comparing subfolders of Dropbox directory \"%v\" to local directory \"%v\":\n", remoteRoot, localRoot)
+		for _, f := range localDirs {
+			fmt.Println(f)
+		}
+		fmt.Println("")
+	} else {
+		fmt.Printf("Comparing Dropbox directory \"%v\" to local directory \"%v\"\n", remoteRoot, localRoot)
+	}
+
 	if !opts.SkipContentHash {
 		fmt.Println("Checking content hashes.")
 	}
@@ -164,7 +185,7 @@ func main() {
 	var dropboxManifest *FileHeap
 	var dropboxErr error
 	go func() {
-		dropboxManifest, dropboxErr = getDropboxManifest(updateChan, dbxClient, remoteRoot)
+		dropboxManifest, dropboxErr = getDropboxManifest(updateChan, dbxClient, remoteRoot, localDirs)
 		wg.Done()
 	}()
 
@@ -172,7 +193,7 @@ func main() {
 	var errored []*FileError
 	var localErr error
 	go func() {
-		localDir := NewLocalDirectory(localRoot, opts.SkipContentHash, workerCount)
+		localDir := NewLocalDirectory(localRoot, localDirs, opts.SkipContentHash, workerCount)
 		localManifest, errored, localErr = localDir.Manifest(updateChan)
 		wg.Done()
 	}()
@@ -273,72 +294,103 @@ func defaultRemoteRoot(localRoot string) string {
 	}
 }
 
-func getDropboxManifest(updateChan chan<- *scanProgressUpdate, dbxClient *dropbox.Client, rootPath string) (manifest *FileHeap, err error) {
+func listFolders(localRoot string) (folders []string, err error) {
+	root, err := filepath.Abs(localRoot)
+	if err != nil {
+		return
+	}
+	files, err := ioutil.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, f := range files {
+		if f.IsDir() && !skipLocalDir(f.Name()) {
+			folders = append(folders, f.Name())
+		}
+	}
+
+	return
+}
+
+func getDropboxManifest(updateChan chan<- *scanProgressUpdate, dbxClient *dropbox.Client, rootPath string, subdirectories []string) (manifest *FileHeap, err error) {
+	// TODO handle the subdirectories
 	manifest = &FileHeap{}
 	heap.Init(manifest)
-	cursor := ""
-	keepGoing := true
-	retryCount := 0
 
-	for keepGoing {
-		var resp *dropbox.ListFolderOutput
-		if cursor != "" {
-			arg := &dropbox.ListFolderContinueInput{Cursor: cursor}
-			resp, err = dbxClient.Files.ListFolderContinue(arg)
-		} else {
-			apiPath := rootPath
-			if apiPath == "/" {
-				apiPath = ""
-			}
-			arg := &dropbox.ListFolderInput{
-				Path:             apiPath,
-				Recursive:        true,
-				IncludeMediaInfo: false,
-				IncludeDeleted:   false,
-			}
-			resp, err = dbxClient.Files.ListFolder(arg)
+	var pathsToScan []string
+	if len(subdirectories) > 0 {
+		for _, dir := range subdirectories {
+			pathsToScan = append(pathsToScan, path.Join(rootPath, dir))
 		}
-		if err != nil {
-			// TODO: submit feature request for dropbox client to expose retry_after param
-			if strings.HasPrefix(err.Error(), "too_many_requests") {
-				fmt.Fprintf(os.Stderr, "\n[%s] [%d retries] Dropbox returned too many requests error, sleeping 60 seconds\n", time.Now().Format("15:04:05"), retryCount)
-				// fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				// fmt.Fprintf(os.Stderr, "Response: %v\n", resp)
-				retryCount++
-				time.Sleep(60 * time.Second)
-				continue
-			} else if retryCount < 10 { // TODO extract this magic number
-				fmt.Fprintf(os.Stderr, "\n[%s] [%d retries] Error: %s - sleeping 1 second and retrying\n", time.Now().Format("15:04:05"), retryCount, err)
-				fmt.Fprintf(os.Stderr, "Full Error: %#v\n", err)
-				retryCount++
-				time.Sleep(1 * time.Second)
-				continue
+	} else {
+		pathsToScan = append(pathsToScan, rootPath)
+	}
+
+	for _, scanPath := range pathsToScan {
+		cursor := ""
+		keepGoing := true
+		retryCount := 0
+
+		for keepGoing {
+			var resp *dropbox.ListFolderOutput
+			if cursor != "" {
+				arg := &dropbox.ListFolderContinueInput{Cursor: cursor}
+				resp, err = dbxClient.Files.ListFolderContinue(arg)
 			} else {
-				fmt.Fprintf(os.Stderr, "\n[%s] Hit maximum of %d retries; aborting.\n", time.Now().Format("15:04:05"), retryCount)
-				return
+				apiPath := scanPath
+				if apiPath == "/" {
+					apiPath = ""
+				}
+				arg := &dropbox.ListFolderInput{
+					Path:             apiPath,
+					Recursive:        true,
+					IncludeMediaInfo: false,
+					IncludeDeleted:   false,
+				}
+				resp, err = dbxClient.Files.ListFolder(arg)
 			}
-		}
-		// call was successful, reset retryCount
-		retryCount = 0
-		for _, entry := range resp.Entries {
-			if entry.Tag == "file" {
-
-				var relPath string
-				relPath, err = normalizePath(rootPath, entry.PathLower)
-				if err != nil {
+			if err != nil {
+				// TODO: submit feature request for dropbox client to expose retry_after param
+				if strings.HasPrefix(err.Error(), "too_many_requests") {
+					fmt.Fprintf(os.Stderr, "\n[%s] [%d retries] Dropbox returned too many requests error, sleeping 60 seconds\n", time.Now().Format("15:04:05"), retryCount)
+					// fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+					// fmt.Fprintf(os.Stderr, "Response: %v\n", resp)
+					retryCount++
+					time.Sleep(60 * time.Second)
+					continue
+				} else if retryCount < 10 { // TODO extract this magic number
+					fmt.Fprintf(os.Stderr, "\n[%s] [%d retries] Error: %s - sleeping 1 second and retrying\n", time.Now().Format("15:04:05"), retryCount, err)
+					fmt.Fprintf(os.Stderr, "Full Error: %#v\n", err)
+					retryCount++
+					time.Sleep(1 * time.Second)
+					continue
+				} else {
+					fmt.Fprintf(os.Stderr, "\n[%s] Hit maximum of %d retries; aborting.\n", time.Now().Format("15:04:05"), retryCount)
 					return
 				}
-				heap.Push(manifest, &File{
-					Path:        relPath,
-					ContentHash: entry.ContentHash,
-				})
 			}
+			// call was successful, reset retryCount
+			retryCount = 0
+			for _, entry := range resp.Entries {
+				if entry.Tag == "file" {
+
+					var relPath string
+					relPath, err = normalizePath(rootPath, entry.PathLower)
+					if err != nil {
+						return
+					}
+					heap.Push(manifest, &File{
+						Path:        relPath,
+						ContentHash: entry.ContentHash,
+					})
+				}
+			}
+
+			cursor = resp.Cursor
+			keepGoing = resp.HasMore
+
+			updateChan <- &scanProgressUpdate{Type: remoteProgress, Count: manifest.Len()}
 		}
-
-		cursor = resp.Cursor
-		keepGoing = resp.HasMore
-
-		updateChan <- &scanProgressUpdate{Type: remoteProgress, Count: manifest.Len()}
 	}
 
 	return
