@@ -160,11 +160,7 @@ func main() {
 	dbxClient := dropbox.New(dropbox.NewConfig(token))
 
 	if opts.SelectiveSync {
-		fmt.Printf("Comparing subfolders of Dropbox directory \"%v\" to local directory \"%v\":\n", remoteRoot, localRoot)
-		for _, f := range localDirs {
-			fmt.Println(f)
-		}
-		fmt.Println("")
+		fmt.Printf("Comparing subfolders of Dropbox directory \"%v\" to local directory \"%v\"\n", remoteRoot, localRoot)
 	} else {
 		fmt.Printf("Comparing Dropbox directory \"%v\" to local directory \"%v\"\n", remoteRoot, localRoot)
 	}
@@ -258,6 +254,14 @@ func main() {
 
 	manifestComparison := compareManifests(dropboxManifest, localManifest, errored)
 
+	if manifestComparison.Misses > 0 {
+		fmt.Printf("FAILURE: %d sync mismatches detected.\n", manifestComparison.Misses)
+	} else {
+		fmt.Printf("SUCCESS: verified local sync.\n")
+	}
+	fmt.Println("")
+
+	fmt.Println("DETAILS:")
 	fmt.Println("")
 
 	printFileList(manifestComparison.OnlyRemote, "Files only in remote")
@@ -278,6 +282,17 @@ func main() {
 	fmt.Println("SUMMARY:")
 	fmt.Printf("Files matched: %d/%d\n", manifestComparison.Matches, total)
 	fmt.Printf("Files not matched: %d/%d\n", manifestComparison.Misses, total)
+
+	if opts.SelectiveSync {
+		fmt.Println("Subfolders verified:")
+		for _, f := range localDirs {
+			fmt.Println(f)
+		}
+	}
+
+	if manifestComparison.Misses > 0 {
+		os.Exit(1)
+	}
 }
 
 func defaultRemoteRoot(localRoot string) string {
