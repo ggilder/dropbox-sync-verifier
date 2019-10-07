@@ -255,9 +255,9 @@ func main() {
 	manifestComparison := compareManifests(dropboxManifest, localManifest, errored)
 
 	if manifestComparison.Misses > 0 {
-		fmt.Printf("FAILURE: %d sync mismatches detected.\n", manifestComparison.Misses)
+		fmt.Printf("❌ FAILURE: %d sync mismatches detected.\n", manifestComparison.Misses)
 	} else {
-		fmt.Printf("SUCCESS: verified local sync.\n")
+		fmt.Printf("✅ SUCCESS: verified local sync.\n")
 	}
 	fmt.Println("")
 
