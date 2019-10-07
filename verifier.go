@@ -24,6 +24,7 @@ import (
 
 /*
 TODO
+- Move authorization token to a file in home directory? (At least as an option)
 - Performance improvements:
 	- Profile to find bottlenecks
 	- Test if buffered channels improve performance in the parallel local file processing
