@@ -16,6 +16,7 @@ import (
 
 	"github.com/dustin/go-humanize"
 	"github.com/jessevdk/go-flags"
+	"github.com/mitchellh/go-homedir"
 	"github.com/pkg/profile"
 	"github.com/tj/go-dropbox"
 
@@ -24,7 +25,6 @@ import (
 
 /*
 TODO
-- Move authorization token to a file in home directory? (At least as an option)
 - Performance improvements:
 	- Profile to find bottlenecks
 	- Test if buffered channels improve performance in the parallel local file processing
@@ -110,9 +110,28 @@ var ignoredFiles = [...]string{"Icon\r", ".DS_Store", ".dropbox"}
 var ignoredDirectories = [...]string{"@eaDir", ".dropbox.cache"}
 
 func main() {
-	token := os.Getenv("DROPBOX_ACCESS_TOKEN")
+	tokenFromEnv := os.Getenv("DROPBOX_ACCESS_TOKEN")
+
+	homeDir, err := homedir.Dir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Please set $HOME to a readable path!")
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+	configDir := filepath.Join(homeDir, ".dropbox-sync-verifier")
+	tokenPath := filepath.Join(configDir, "token")
+	b, err := ioutil.ReadFile(tokenPath)
+	tokenFromConfigFile := strings.TrimSpace(string(b))
+
+	token := ""
+	if tokenFromConfigFile != "" {
+		token = tokenFromConfigFile
+	} else {
+		token = tokenFromEnv
+	}
+
 	if token == "" {
-		fmt.Fprintln(os.Stderr, "Missing Dropbox OAuth token! Please set the DROPBOX_ACCESS_TOKEN environment variable.")
+		fmt.Fprintf(os.Stderr, "Missing Dropbox OAuth token! Please add token to %s or set the DROPBOX_ACCESS_TOKEN environment variable.\n", tokenPath)
 		os.Exit(1)
 	}
 
@@ -127,7 +146,7 @@ func main() {
 		ProfileMemory      bool   `long:"profile-memory" description:"Generate a pprof memory profile"`
 	}
 
-	_, err := flags.Parse(&opts)
+	_, err = flags.Parse(&opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
