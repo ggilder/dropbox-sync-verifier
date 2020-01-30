@@ -67,6 +67,11 @@ func (d *LocalDirectory) Manifest(updateChan chan<- *scanProgressUpdate) (manife
 					return filepath.SkipDir
 				}
 
+				// check symlinks
+				if (info.Mode()&os.ModeSymlink != 0) && !skipLocalFile(entryPath) {
+					processChan <- entryPath
+				}
+
 				if info.Mode().IsRegular() && !skipLocalFile(entryPath) {
 					processChan <- entryPath
 				}
@@ -144,7 +149,10 @@ func handleLocalFile(localRootLowercase string, contentHash bool, processChan <-
 
 		hash := ""
 		placeholder := false
-		if fileIsPlaceholder(entryPath) {
+		symlink := false
+		if fileIsSymlink(entryPath) {
+			symlink = true
+		} else if fileIsPlaceholder(entryPath) {
 			placeholder = true
 		} else if contentHash {
 			hash, err = dropboxStyleContentHash(entryPath, hashBuffer)
@@ -158,9 +166,21 @@ func handleLocalFile(localRootLowercase string, contentHash bool, processChan <-
 			Path:        relPath,
 			ContentHash: hash,
 			Placeholder: placeholder,
+			Symlink:     symlink,
 		}
 	}
 	wg.Done()
+}
+
+func fileIsSymlink(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return true
+	}
+	return false
 }
 
 func fileIsPlaceholder(path string) bool {

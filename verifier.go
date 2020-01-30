@@ -44,6 +44,7 @@ type File struct {
 	Path        string
 	ContentHash string
 	Placeholder bool
+	Symlink     bool
 }
 
 // FileError records a local file that could not be read due to an error
@@ -93,6 +94,7 @@ type ManifestComparison struct {
 	Matches         int
 	Misses          int
 	Placeholders    int
+	Symlinks        int
 }
 
 type progressType int
@@ -110,6 +112,9 @@ type scanProgressUpdate struct {
 
 var ignoredFiles = [...]string{"Icon\r", ".DS_Store", ".dropbox"}
 var ignoredDirectories = [...]string{"@eaDir", ".dropbox.cache"}
+
+// Used for detecting symlinks that Dropbox doesn't actually sync
+const EmptyFileContentHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 func main() {
 	tokenFromEnv := os.Getenv("DROPBOX_ACCESS_TOKEN")
@@ -292,6 +297,7 @@ func main() {
 
 	fmt.Printf("Errored: %d\n\n", len(manifestComparison.Errored))
 	fmt.Printf("Placeholder files skipped: %d\n\n", manifestComparison.Placeholders)
+	fmt.Printf("Symlink files skipped: %d\n\n", manifestComparison.Symlinks)
 
 	if len(manifestComparison.Errored) > 0 {
 		for _, rec := range manifestComparison.Errored {
@@ -302,11 +308,11 @@ func main() {
 		}
 	}
 
-	total := manifestComparison.Matches + manifestComparison.Misses + manifestComparison.Placeholders
+	total := manifestComparison.Matches + manifestComparison.Misses + manifestComparison.Placeholders + manifestComparison.Symlinks
 	fmt.Println("SUMMARY:")
 	fmt.Printf("Files matched: %d/%d\n", manifestComparison.Matches, total)
 	fmt.Printf("Files not matched: %d/%d\n", manifestComparison.Misses, total)
-	fmt.Printf("Files skipped: %d/%d\n", manifestComparison.Placeholders, total)
+	fmt.Printf("Files skipped: %d/%d\n", manifestComparison.Placeholders+manifestComparison.Symlinks, total)
 
 	if opts.SelectiveSync {
 		fmt.Println("Subfolders verified:")
@@ -487,6 +493,9 @@ func compareManifests(remoteManifest, localManifest *FileHeap, errored []*FileEr
 			// First check for placeholder files which shouldn't be compared
 			if local.Placeholder {
 				comparison.Placeholders++
+			} else if local.Symlink && remote.ContentHash == EmptyFileContentHash {
+				// Dropbox creates an empty file when it encounters a symlink
+				comparison.Symlinks++
 			} else if compareFileContents(remote, local) {
 				comparison.Matches++
 			} else {
