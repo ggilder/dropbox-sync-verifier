@@ -43,6 +43,7 @@ TODO
 type File struct {
 	Path        string
 	ContentHash string
+	Placeholder bool
 }
 
 // FileError records a local file that could not be read due to an error
@@ -91,6 +92,7 @@ type ManifestComparison struct {
 	Errored         []*FileError
 	Matches         int
 	Misses          int
+	Placeholders    int
 }
 
 type progressType int
@@ -289,6 +291,8 @@ func main() {
 	printFileList(manifestComparison.ContentMismatch, "Files whose contents don't match")
 
 	fmt.Printf("Errored: %d\n\n", len(manifestComparison.Errored))
+	fmt.Printf("Placeholder files skipped: %d\n\n", manifestComparison.Placeholders)
+
 	if len(manifestComparison.Errored) > 0 {
 		for _, rec := range manifestComparison.Errored {
 			fmt.Printf("%s: %s\n", rec.Path, rec.Error)
@@ -298,10 +302,11 @@ func main() {
 		}
 	}
 
-	total := manifestComparison.Matches + manifestComparison.Misses
+	total := manifestComparison.Matches + manifestComparison.Misses + manifestComparison.Placeholders
 	fmt.Println("SUMMARY:")
 	fmt.Printf("Files matched: %d/%d\n", manifestComparison.Matches, total)
 	fmt.Printf("Files not matched: %d/%d\n", manifestComparison.Misses, total)
+	fmt.Printf("Files skipped: %d/%d\n", manifestComparison.Placeholders, total)
 
 	if opts.SelectiveSync {
 		fmt.Println("Subfolders verified:")
@@ -479,7 +484,10 @@ func compareManifests(remoteManifest, localManifest *FileHeap, errored []*FileEr
 			local = localManifest.PopOrNil()
 		} else {
 			// this must mean that remote.Path == local.Path
-			if compareFileContents(remote, local) {
+			// First check for placeholder files which shouldn't be compared
+			if local.Placeholder {
+				comparison.Placeholders++
+			} else if compareFileContents(remote, local) {
 				comparison.Matches++
 			} else {
 				comparison.ContentMismatch = append(comparison.ContentMismatch, local.Path)

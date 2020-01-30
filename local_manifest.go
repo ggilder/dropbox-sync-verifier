@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/pkg/xattr"
 )
 
 type LocalDirectory struct {
@@ -141,7 +143,10 @@ func handleLocalFile(localRootLowercase string, contentHash bool, processChan <-
 		}
 
 		hash := ""
-		if contentHash {
+		placeholder := false
+		if fileIsPlaceholder(entryPath) {
+			placeholder = true
+		} else if contentHash {
 			hash, err = dropboxStyleContentHash(entryPath, hashBuffer)
 			if err != nil {
 				errorChan <- &FileError{Path: relPath, Error: err}
@@ -152,9 +157,18 @@ func handleLocalFile(localRootLowercase string, contentHash bool, processChan <-
 		resultChan <- &File{
 			Path:        relPath,
 			ContentHash: hash,
+			Placeholder: placeholder,
 		}
 	}
 	wg.Done()
+}
+
+func fileIsPlaceholder(path string) bool {
+	b, err := xattr.Get(path, "com.dropbox.placeholder")
+	if err == nil && len(b) > 0 {
+		return true
+	}
+	return false
 }
 
 // See https://www.dropbox.com/developers/reference/content-hash
