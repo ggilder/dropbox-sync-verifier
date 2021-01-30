@@ -151,6 +151,7 @@ func main() {
 		WorkerCount        int    `short:"w" long:"workers" description:"Number of worker threads to use (defaults to 8) - set to 0 to use all CPU cores" default:"8"`
 		FreeMemoryInterval int    `long:"free-memory-interval" description:"Interval (in seconds) to manually release unused memory back to the OS on low-memory systems" default:"0"`
 		ProfileMemory      bool   `long:"profile-memory" description:"Generate a pprof memory profile"`
+		DisallowSmartSync  bool   `long:"disallow-smart-sync" description:"Fail verification on presence of Smart Sync placeholder files"`
 	}
 
 	_, err = flags.Parse(&opts)
@@ -281,8 +282,13 @@ func main() {
 
 	manifestComparison := compareManifests(dropboxManifest, localManifest, errored)
 
+	failed := false
 	if manifestComparison.Misses > 0 {
 		fmt.Printf("❌ FAILURE: %d sync mismatches detected.\n", manifestComparison.Misses)
+		failed = true
+	} else if manifestComparison.Placeholders > 0 && opts.DisallowSmartSync {
+		fmt.Printf("❌ FAILURE: %d Smart Sync placeholders detected with 'Disallow Smart Sync' option on.\n", manifestComparison.Misses)
+		failed = true
 	} else {
 		fmt.Printf("✅ SUCCESS: verified local sync.\n")
 	}
@@ -321,7 +327,7 @@ func main() {
 		}
 	}
 
-	if manifestComparison.Misses > 0 {
+	if failed {
 		os.Exit(1)
 	}
 }
